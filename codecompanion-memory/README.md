@@ -1,6 +1,25 @@
 # CodeCompanion Memory Skill
 
 Search through previous CodeCompanion chat conversations using semantic search.
+This is basically the "skill" equivalent of the `@memory` tool from
+[codecompanion-history](https://github.com/ravitemer/codecompanion-history.nvim).
+
+
+## Why does this exist?
+
+The fantastic
+[codecompanion-history](https://github.com/ravitemer/codecompanion-history.nvim)
+neovim plugin is capable of summarizing and vectorizing conversations with
+CodeCompanion. Once a conversation is summarized and vectorized, you can use
+the `@memory` tool to search through past conversations. Under the hood, it
+uses `vectorcode` to fetch relevant "memories" from the vector database. Your
+next conversations will be enhanced by relevant context from past chats.
+
+This works really well with vanilla CodeCompanion, but it doesn't work at all
+when using ACP adapters (necessary to use Claude Code). This skill fills that
+gap by wrapping `vectorcode` in a bash script that can be invoked as a Claude
+Code skill. Ultimately, it allows you to get the same memory search functionality
+when using Claude Code as you would with vanilla CodeCompanion.
 
 ## Quick Start
 
