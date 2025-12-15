@@ -1,6 +1,7 @@
 ---
 name: codecompanion-memory
 description: Search through previous CodeCompanion chat conversations using semantic search. Use this skill when the user mentions past conversations, asks "do you remember", or when historical context from previous sessions would help solve the current problem.
+allowed-tools: Bash, mcp__acp__Read, Skill
 ---
 
 # CodeCompanion Memory Skill
@@ -20,7 +21,7 @@ Invoke this skill when:
 ## Usage
 
 ```bash
-~/informatique/go/codecompanion-memory/query.sh --query "your search query"
+~/.claude/skills/codecompanion-memory/query.sh --query "your search query"
 ```
 
 ### Parameters
@@ -48,7 +49,7 @@ Invoke this skill when:
 
 ```bash
 # User: "I'm getting a CORS error, have we dealt with this before?"
-~/informatique/go/codecompanion-memory/query.sh \
+~/.claude/skills/codecompanion-memory/query.sh \
   --query "CORS error HTTP request" \
   --count 3
 ```
@@ -57,7 +58,7 @@ Invoke this skill when:
 
 ```bash
 # User: "What database did we choose for the user service?"
-~/informatique/go/codecompanion-memory/query.sh \
+~/.claude/skills/codecompanion-memory/query.sh \
   --query "database choice user service" \
   --count 5 \
   --verbose
@@ -67,7 +68,7 @@ Invoke this skill when:
 
 ```bash
 # User: "How did I implement authentication last time?"
-~/informatique/go/codecompanion-memory/query.sh \
+~/.claude/skills/codecompanion-memory/query.sh \
   --query "authentication implementation pattern" \
   --count 3 \
   --verbose
@@ -130,23 +131,23 @@ The database uses **semantic embeddings**, meaning:
 - Synonyms and related terms are automatically understood
 - Context and meaning are preserved across different phrasings
 
-## Installation for Claude Code
+## Installation
+
+The skill is installed at `~/.claude/skills/codecompanion-memory/`.
+
+If you need to reinstall or update:
 
 ```bash
 mkdir -p ~/.claude/skills/codecompanion-memory
 
-# Copy required files
-cp ~/informatique/go/codecompanion-memory/SKILL.md \
+# Copy required files from source
+cp /path/to/source/SKILL.md \
    ~/.claude/skills/codecompanion-memory/
-cp ~/informatique/go/codecompanion-memory/query.sh \
+cp /path/to/source/query.sh \
    ~/.claude/skills/codecompanion-memory/
 
 # Make script executable
 chmod +x ~/.claude/skills/codecompanion-memory/query.sh
-
-# Update SKILL.md to use correct path
-sed -i 's|~/informatique/go/codecompanion-memory/|~/.claude/skills/codecompanion-memory/|g' \
-  ~/.claude/skills/codecompanion-memory/SKILL.md
 ```
 
 ## Dependencies
@@ -268,5 +269,5 @@ This skill is designed to work seamlessly with Claude Code's skill system:
 ---
 
 **Status**: ✅ Production ready  
-**Location**: `~/informatique/go/codecompanion-memory/`  
+**Location**: `~/.claude/skills/codecompanion-memory/`  
 **Last Updated**: 2025-12-15
