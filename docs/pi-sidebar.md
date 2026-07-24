@@ -43,7 +43,7 @@ The weekly Codex bar is the overall account percentage remaining, not usage attr
 /sidebar status          Show current state, width, and repository count
 ```
 
-The default width is 48 columns. The sidebar automatically hides when showing it would leave fewer than 70 columns for Pi.
+The default width is 53 columns. The sidebar automatically hides when showing it would leave fewer than 70 columns for Pi.
 
 ## Git discovery
 

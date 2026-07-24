@@ -16,7 +16,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-const DEFAULT_WIDTH = 48;
+const DEFAULT_WIDTH = 53;
 const MIN_MAIN_WIDTH = 70;
 const REFRESH_TICKS = 15;
 const TODO_WIDGET_KEY = "rpiv-todos";
