@@ -1,6 +1,6 @@
 # Worktree-aware Pi sidebar Git section
 
-Status: Implemented — awaiting live reload verification
+Status: Completed
 Date: 2026-07-24
 
 ## 1. Brief
@@ -107,8 +107,8 @@ Manual proof after implementation:
 - [x] Update implemented-behavior documentation.
 - [x] Run repository hygiene checks.
 - [x] Record deviations and exact validation results, then mark this plan completed.
-- [ ] Commit and merge after the user reported that `/reload` still loaded the unchanged primary-checkout source.
-- [ ] Verify the installed source contains worktree enumeration and ask the user to reload it.
+- [x] Commit and merge after the user reported that `/reload` still loaded the unchanged primary-checkout source.
+- [x] Verify the installed source and a fresh Pi TUI show dirty sibling worktrees; ask the user to reload the already-open session.
 
 ## 8. Open questions / assumptions
 
@@ -135,12 +135,13 @@ Checks completed:
 - `~/.pi/agent/npm/node_modules/.bin/jiti extensions/pi-sidebar.test.ts`
 - `git diff --check`
 - `pre-commit run --all-files` (`Detect hardcoded secrets` passed)
-- Live repository inventory confirmed Git reports the clean primary checkout plus dirty sibling worktrees outside it, which are the paths the new refresh loop consumes.
+- Live repository inventory confirmed Git reports the primary checkout plus dirty sibling worktrees outside it, which are the paths the new refresh loop consumes.
+- Fresh 180×40 tmux-backed Pi smoke test from the primary checkout showed both `commands/sum.md` in `master` and a temporary `.sidebar-worktree-smoke` file under `sidebar-git-worktrees`; the marker was removed after capture.
+- The installed package points at the stable primary-checkout source and that source now contains worktree enumeration. No reinstall is needed; the already-open Pi session must run `/reload` again after the merge.
 
-Pending live verification:
+Review note:
 
-- The installed package already points at the stable primary-checkout source, so no reinstall is needed after merge; the open Pi session must run `/reload` again.
-- A fresh subagent review could not start because the installed `pi-mcp-adapter` currently cannot resolve `@modelcontextprotocol/sdk/types.js`; automated extension and repository checks still passed.
+- A fresh subagent review could not start because the installed `pi-mcp-adapter` currently cannot resolve `@modelcontextprotocol/sdk/types.js`; automated extension, repository, and live TUI checks passed.
 
 ## Grill record
 
