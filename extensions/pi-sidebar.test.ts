@@ -71,6 +71,26 @@ async function main(): Promise<void> {
 		"bare",
 		"",
 	].join("\0")), [primary, sibling]);
+	assert.deepEqual([...__test__.replayWorkedWorktrees([
+		{ type: "custom", customType: "other", data: { path: sibling } },
+		{ type: "custom", customType: "pi-sidebar-worktree-worked", data: { path: primary } },
+		{ type: "custom", customType: "pi-sidebar-worktree-worked", data: { path: 42 } },
+	])], [primary]);
+	const cleanRepo = { path: primary, label: "repo", branch: "main", files: [] };
+	const dirtyRepo = { ...cleanRepo, files: [{ status: "M", path: "file.ts", added: 1, removed: 0 }] };
+	const changedDirtyRepo = { ...cleanRepo, files: [{ status: "M", path: "file.ts", added: 2, removed: 0 }] };
+	const cleanBaseline = __test__.observeWorkedWorktrees([cleanRepo], [primary], new Map(), new Set());
+	assert.deepEqual(cleanBaseline.newlyWorked, []);
+	const cleanToDirty = __test__.observeWorkedWorktrees([dirtyRepo], [primary], cleanBaseline.signatures, new Set());
+	assert.deepEqual(cleanToDirty.newlyWorked, [primary]);
+	const dirtyBaseline = __test__.observeWorkedWorktrees([dirtyRepo], [primary], new Map(), new Set());
+	assert.deepEqual(dirtyBaseline.newlyWorked, []);
+	const failedObservation = __test__.observeWorkedWorktrees([{ ...cleanRepo, error: "git failed" }], [primary], dirtyBaseline.signatures, new Set());
+	assert.deepEqual(failedObservation.newlyWorked, []);
+	assert.equal(failedObservation.signatures.get(primary), dirtyBaseline.signatures.get(primary));
+	assert.deepEqual(__test__.observeWorkedWorktrees([cleanRepo], [primary], dirtyBaseline.signatures, new Set()).newlyWorked, [primary]);
+	assert.deepEqual(__test__.observeWorkedWorktrees([changedDirtyRepo], [primary], dirtyBaseline.signatures, new Set()).newlyWorked, [primary]);
+	assert.deepEqual(__test__.observeWorkedWorktrees([changedDirtyRepo], [primary], dirtyBaseline.signatures, new Set([primary])).newlyWorked, []);
 	const deltas = __test__.parseNumstat([
 		"3\t1\tsrc/long/file.ts",
 		"-\t-\timage.png",
@@ -155,6 +175,7 @@ async function main(): Promise<void> {
 		mcpServers: [],
 		gitRepos: [],
 		linkedWorktrees: [],
+		workedWorktrees: new Set(),
 		activeTools: new Map(),
 		speedSamples: [],
 		sessionStartedAt: Date.now(),
@@ -195,12 +216,29 @@ async function main(): Promise<void> {
 	state.codexWeeklyQuota = { remaining: 83, resetAt: Date.now() + 6.5 * 86_400_000 };
 	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
 	assert.match(quotaLines.join("\n"), /week  ████████░░ 83% resets in 6d/);
+	const weekIndex = quotaLines.findIndex((line) => line.startsWith("week "));
+	assert.equal(quotaLines[weekIndex + 1], "compactions  2");
 	state.codexWeeklyQuota = undefined;
 	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week  loading…/);
 	state.codexWeeklyQuota = null;
 	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week  unavailable/);
 	state.ctx.model.provider = "anthropic";
 	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week /);
+	state.gitRepos = [{ path: "/repo", label: "repo", branch: "main", files: [] }, {
+		path: "/outside/repo",
+		label: "outside/repo",
+		branch: "clean-sibling",
+		files: [],
+	}];
+	const untouchedCleanLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n");
+	assert.doesNotMatch(untouchedCleanLines, /repo • main|clean-sibling/);
+	state.workedWorktrees.add("/outside/repo");
+	const rememberedCleanLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n");
+	assert.match(rememberedCleanLines, /clean-sibling/);
+	assert.match(rememberedCleanLines, /clean/);
+	state.workedWorktrees.clear();
+	state.gitRepos = [{ path: "/repo", label: "repo", branch: "?", files: [], error: "git status failed" }];
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /git status failed/);
 	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
 	for (const title of ["Conversation", "Stats", "Todos (0/0)", "Git"]) {
 		assert.equal(spacedLines[spacedLines.indexOf(title) - 1], "");

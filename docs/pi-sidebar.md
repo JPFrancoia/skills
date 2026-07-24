@@ -23,7 +23,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 
 The native footer and `rpiv-todo`'s above-editor widget are hidden because their data is shown in the sidebar.
 
-The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. Its value starts in the same column as the context percentage and ends with `resets in Xd`, or `resets in Xh` below one day. It resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
+The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. Its value starts in the same column as the context percentage and ends with `resets in Xd`, or `resets in Xh` below one day. The conversation compaction count appears directly beneath it, or beneath context usage when Codex quota is not shown. The extension resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
 
 ## Commands
 
@@ -40,11 +40,11 @@ The default width is 48 columns. The sidebar automatically hides when showing it
 
 ## Git discovery
 
-The checkout containing Pi's cwd is always shown. Git's native worktree list supplies dirty sibling worktrees from the same repository, including worktrees outside the current directory tree. Clean sibling worktrees are omitted.
+Git's native worktree list supplies the checkout containing Pi's cwd and sibling worktrees from the same repository, including paths outside the current directory tree. Dirty worktrees are always shown. A clean worktree is hidden unless its Git status changed while the current Pi conversation was open; after that, it remains visible as clean for the rest of that conversation. This memory is stored in the Pi session, survives `/reload`, and follows the active `/tree` branch. A clean worktree that was merely present at startup or opened by another process remains hidden.
 
-Below the current checkout, directories containing their own `.git` directory are independent repositories and are included when dirty. Linked-worktree container rows are filtered from the containing checkout's status instead of appearing as untracked directories.
+Below the current checkout, directories containing their own `.git` directory are independent repositories and are included only when dirty. They are not retained after becoming clean. Linked-worktree container rows are filtered from the containing checkout's status instead of appearing as untracked directories.
 
-Files are grouped under their checkout or repository, and long paths are shortened from the left so the filename remains readable. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
+Files are grouped under their checkout or repository, and long paths are shortened from the left so the filename remains readable. If no worktree or nested repository qualifies, the Git section shows one compact `clean` row. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
 
 Git worktree membership and Git/MCP state refresh every 15 seconds and after relevant Pi events. `/sidebar refresh` also forces independent-repository rediscovery.
 

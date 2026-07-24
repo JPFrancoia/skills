@@ -20,6 +20,7 @@ const DEFAULT_WIDTH = 48;
 const MIN_MAIN_WIDTH = 70;
 const REFRESH_TICKS = 15;
 const TODO_WIDGET_KEY = "rpiv-todos";
+const WORKED_WORKTREE_ENTRY = "pi-sidebar-worktree-worked";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const WEEKLY_QUOTA_BAR_WIDTH = 10;
 const PRUNED_DIRS = new Set([".cache", ".next", ".venv", "build", "dist", "node_modules", "target", "vendor", "venv"]);
@@ -101,6 +102,7 @@ type SidebarState = {
 	gitRepos: GitRepo[];
 	rootRepo?: string;
 	linkedWorktrees: string[];
+	workedWorktrees: Set<string>;
 	context?: { tokens: number | null; contextWindow: number; percent: number | null };
 	codexWeeklyQuota?: CodexWeeklyQuota | null;
 	messageStartedAt?: number;
@@ -186,6 +188,16 @@ function replayTodos(entries: readonly unknown[]): TodoTask[] {
 		tasks = entry.message.details.tasks.map((task) => ({ ...task }));
 	}
 	return tasks;
+}
+
+function replayWorkedWorktrees(entries: readonly unknown[]): Set<string> {
+	const paths = new Set<string>();
+	for (const raw of entries) {
+		const entry = raw as { type?: string; customType?: string; data?: { path?: unknown } };
+		if (entry.type !== "custom" || entry.customType !== WORKED_WORKTREE_ENTRY) continue;
+		if (typeof entry.data?.path === "string" && entry.data.path) paths.add(resolve(entry.data.path));
+	}
+	return paths;
 }
 
 function textContent(content: unknown): string {
@@ -295,6 +307,44 @@ function parseWorktreePaths(output: string): string[] {
 	}
 	flush();
 	return paths;
+}
+
+function worktreeSignature(repo: GitRepo): string | undefined {
+	if (repo.error) return undefined;
+	return JSON.stringify(repo.files.map((file) => [
+		file.status,
+		file.path,
+		file.oldPath,
+		file.added,
+		file.removed,
+		file.binary,
+		file.untracked,
+	]));
+}
+
+function observeWorkedWorktrees(
+	repos: readonly GitRepo[],
+	worktreePaths: readonly string[],
+	previous: ReadonlyMap<string, string>,
+	worked: ReadonlySet<string>,
+): { signatures: Map<string, string>; newlyWorked: string[] } {
+	const byPath = new Map(repos.map((repo) => [repo.path, repo]));
+	const signatures = new Map<string, string>();
+	const newlyWorked: string[] = [];
+
+	for (const path of new Set(worktreePaths.map((value) => resolve(value)))) {
+		const repo = byPath.get(path);
+		if (!repo) continue;
+		const signature = worktreeSignature(repo);
+		const prior = previous.get(path);
+		if (signature === undefined) {
+			if (prior !== undefined) signatures.set(path, prior);
+			continue;
+		}
+		signatures.set(path, signature);
+		if (prior !== undefined && prior !== signature && !worked.has(path)) newlyWorked.push(path);
+	}
+	return { signatures, newlyWorked };
 }
 
 async function kind(path: string): Promise<"directory" | "file" | undefined> {
@@ -552,7 +602,6 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 		modelLine,
 		`${theme.fg("dim", "cwd   ")}${location}`,
 		`${theme.fg("dim", "ctx   ")}${contextLine}`,
-		`${theme.fg("dim", "compactions  ")}${state.stats.compactions}`,
 	];
 	if (model?.provider === "openai-codex") {
 		const quota = state.codexWeeklyQuota;
@@ -562,6 +611,7 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 				? `${theme.fg("dim", "week  ")}${theme.fg("warning", "unavailable")}`
 				: `${theme.fg("dim", "week  ")}${weeklyQuotaBar(theme, quota.remaining)} ${theme.fg("accent", `${Math.round(quota.remaining)}%`)}${quota.resetAt === undefined ? "" : theme.fg("dim", ` resets in ${formatQuotaReset(quota.resetAt)}`)}`);
 	}
+	items.push(`${theme.fg("dim", "compactions  ")}${state.stats.compactions}`);
 	return section(theme, "Conversation", items, width);
 }
 
@@ -643,7 +693,7 @@ function gitItems(state: SidebarState, theme: Theme, width: number): string[] {
 	if (state.gitRepos.length === 0) return [theme.fg("dim", "(refreshing…)")];
 	const items: string[] = [];
 	for (const repo of state.gitRepos) {
-		if (repo.path !== state.rootRepo && repo.files.length === 0 && !repo.error) continue;
+		if (repo.files.length === 0 && !repo.error && !state.workedWorktrees.has(repo.path)) continue;
 		if (items.length > 0) items.push("");
 		const safeBranch = sanitizePlainText(repo.branch);
 		const safeLabel = sanitizePlainText(repo.label);
@@ -834,6 +884,7 @@ export const __test__ = {
 	parseCodexWeeklyQuota,
 	discoverRepositories,
 	isInsideLinkedWorktree,
+	observeWorkedWorktrees,
 	parseNumstat,
 	parseStatus,
 	parseWorktreePaths,
@@ -841,6 +892,7 @@ export const __test__ = {
 	serverMap,
 	cleanStatusText,
 	replayTodos,
+	replayWorkedWorktrees,
 	SidebarCompositor,
 	truncatePath,
 };
@@ -855,6 +907,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		mcpServers: [],
 		gitRepos: [],
 		linkedWorktrees: [],
+		workedWorktrees: new Set(),
 		activeTools: new Map(),
 		speedSamples: [],
 		sessionStartedAt: Date.now(),
@@ -867,6 +920,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	let refreshPromise: Promise<void> | undefined;
 	let quotaPromise: Promise<void> | undefined;
 	let discoveryCache: { root: string; value: RepoDiscovery } | undefined;
+	let worktreeSignatures = new Map<string, string>();
 	let generation = 0;
 
 	const statuses = () => footerData?.getExtensionStatuses() ?? new Map<string, string>();
@@ -914,9 +968,16 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 					.filter((path) => path !== root && path.startsWith(`${root}${sep}`))
 					.map((path) => normalizeRelativePath(relative(root, path))),
 			])];
-			const paths = [...new Set([root, ...worktrees, ...discovery.repos])];
+			const worktreePaths = [...new Set([root, ...worktrees])];
+			const paths = [...new Set([...worktreePaths, ...discovery.repos])];
 			const gitRepos = await Promise.all(paths.map((path) => refreshOneRepo(pi, root, path, linkedWorktrees)));
 			if (runGeneration !== generation) return;
+			const observation = observeWorkedWorktrees(gitRepos, worktreePaths, worktreeSignatures, state.workedWorktrees);
+			worktreeSignatures = observation.signatures;
+			for (const path of observation.newlyWorked) {
+				state.workedWorktrees.add(path);
+				pi.appendEntry(WORKED_WORKTREE_ENTRY, { path });
+			}
 			state.rootRepo = root;
 			state.linkedWorktrees = linkedWorktrees;
 			state.gitRepos = gitRepos;
@@ -972,6 +1033,8 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		refreshPromise = undefined;
 		quotaPromise = undefined;
 		discoveryCache = undefined;
+		worktreeSignatures.clear();
+		state.workedWorktrees = replayWorkedWorktrees(ctx.sessionManager.getBranch());
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		footerFallbackTimer = undefined;
 		state.sessionStartedAt = sessionStartTime(ctx);
@@ -1036,6 +1099,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	});
 
 	const replaySession = async (_event: unknown, ctx: ExtensionContext) => {
+		state.workedWorktrees = replayWorkedWorktrees(ctx.sessionManager.getBranch());
 		updateSession(ctx);
 		void refreshExternal(ctx);
 		paint();
