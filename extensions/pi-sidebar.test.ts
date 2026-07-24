@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const Module = require("node:module") as { _initPaths(): void };
 process.env.NODE_PATH = [
 	join(homedir(), ".pi", "agent", "npm", "node_modules"),
+	join(homedir(), ".npm-global", "lib", "node_modules", "@earendil-works", "pi-coding-agent", "node_modules"),
 	join(homedir(), ".npm-global", "lib", "node_modules"),
 	process.env.NODE_PATH,
 ].filter(Boolean).join(delimiter);
@@ -84,18 +85,20 @@ async function main(): Promise<void> {
 	].join(".");
 	assert.equal(__test__.codexAccountId(token), "account-123");
 	assert.equal(__test__.codexAccountId("not-a-jwt"), undefined);
-	assert.equal(__test__.parseCodexWeeklyRemaining({
-		rate_limit: { primary_window: { used_percent: 17, limit_window_seconds: 604800 }, secondary_window: null },
-	}), 83);
-	assert.equal(__test__.parseCodexWeeklyRemaining({
+	assert.deepEqual(__test__.parseCodexWeeklyQuota({
+		rate_limit: { primary_window: { used_percent: 17, limit_window_seconds: 604800, reset_at: 1_800_000_000 }, secondary_window: null },
+	}), { remaining: 83, resetAt: 1_800_000_000_000 });
+	assert.deepEqual(__test__.parseCodexWeeklyQuota({
 		rate_limit: {
 			primary_window: { used_percent: 5, limit_window_seconds: 18000 },
 			secondary_window: { used_percent: 120, limit_window_seconds: 604800 },
 		},
-	}), 0);
-	assert.equal(__test__.parseCodexWeeklyRemaining({
+	}), { remaining: 0, resetAt: undefined });
+	assert.equal(__test__.parseCodexWeeklyQuota({
 		rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000 } },
 	}), undefined);
+	assert.equal(__test__.formatQuotaReset(6.5 * 86_400_000, 0), "6d");
+	assert.equal(__test__.formatQuotaReset(23 * 3_600_000, 0), "23h");
 
 	const root = await mkdtemp(join(tmpdir(), "pi-sidebar-"));
 	try {
@@ -163,13 +166,13 @@ async function main(): Promise<void> {
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
 	state.ctx = { cwd: "/repo", model: { id: "gpt-5.6", provider: "openai-codex" } };
-	state.codexWeeklyRemaining = 83;
+	state.codexWeeklyQuota = { remaining: 83, resetAt: Date.now() + 6.5 * 86_400_000 };
 	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);
-	assert.match(quotaLines.join("\n"), /week ████████░░ 83%/);
-	state.codexWeeklyRemaining = undefined;
-	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week loading…/);
-	state.codexWeeklyRemaining = null;
-	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week unavailable/);
+	assert.match(quotaLines.join("\n"), /week  ████████░░ 83% resets in 6d/);
+	state.codexWeeklyQuota = undefined;
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week  loading…/);
+	state.codexWeeklyQuota = null;
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week  unavailable/);
 	state.ctx.model.provider = "anthropic";
 	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week /);
 	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);

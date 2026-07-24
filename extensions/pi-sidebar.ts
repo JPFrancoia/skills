@@ -83,6 +83,11 @@ type FooterData = {
 	getExtensionStatuses(): ReadonlyMap<string, string>;
 };
 
+type CodexWeeklyQuota = {
+	remaining: number;
+	resetAt?: number;
+};
+
 type SidebarState = {
 	enabled: boolean;
 	width: number;
@@ -96,7 +101,7 @@ type SidebarState = {
 	rootRepo?: string;
 	linkedWorktrees: string[];
 	context?: { tokens: number | null; contextWindow: number; percent: number | null };
-	codexWeeklyRemaining?: number | null;
+	codexWeeklyQuota?: CodexWeeklyQuota | null;
 	messageStartedAt?: number;
 	lastResponseMs?: number;
 	liveSpeed?: number;
@@ -426,8 +431,8 @@ function codexAccountId(accessToken: string): string | undefined {
 	}
 }
 
-function parseCodexWeeklyRemaining(payload: unknown): number | undefined {
-	type Window = { used_percent?: unknown; limit_window_seconds?: unknown } | null;
+function parseCodexWeeklyQuota(payload: unknown): CodexWeeklyQuota | undefined {
+	type Window = { used_percent?: unknown; limit_window_seconds?: unknown; reset_at?: unknown } | null;
 	const rateLimit = (payload as { rate_limit?: { primary_window?: Window; secondary_window?: Window } } | undefined)?.rate_limit;
 	const weekly = [rateLimit?.primary_window, rateLimit?.secondary_window]
 		.find((window) => typeof window?.limit_window_seconds === "number"
@@ -435,10 +440,13 @@ function parseCodexWeeklyRemaining(payload: unknown): number | undefined {
 			&& window.limit_window_seconds <= 8 * 24 * 60 * 60);
 	const used = weekly?.used_percent;
 	if (typeof used !== "number" || !Number.isFinite(used)) return undefined;
-	return Math.max(0, Math.min(100, 100 - used));
+	const resetAt = weekly && typeof weekly.reset_at === "number" && Number.isFinite(weekly.reset_at)
+		? weekly.reset_at * 1_000
+		: undefined;
+	return { remaining: Math.max(0, Math.min(100, 100 - used)), resetAt };
 }
 
-async function fetchCodexWeeklyRemaining(ctx: ExtensionContext): Promise<number | undefined> {
+async function fetchCodexWeeklyQuota(ctx: ExtensionContext): Promise<CodexWeeklyQuota | undefined> {
 	const auth = await ctx.modelRegistry.getProviderAuth("openai-codex");
 	const accessToken = auth?.auth.apiKey;
 	const accountId = accessToken && codexAccountId(accessToken);
@@ -454,7 +462,14 @@ async function fetchCodexWeeklyRemaining(ctx: ExtensionContext): Promise<number 
 		signal: AbortSignal.timeout(10_000),
 	});
 	if (!response.ok) return undefined;
-	return parseCodexWeeklyRemaining(await response.json());
+	return parseCodexWeeklyQuota(await response.json());
+}
+
+function formatQuotaReset(resetAt: number, now = Date.now()): string {
+	const remaining = Math.max(0, resetAt - now);
+	return remaining >= 24 * 60 * 60 * 1_000
+		? `${Math.floor(remaining / (24 * 60 * 60 * 1_000))}d`
+		: `${Math.ceil(remaining / (60 * 60 * 1_000))}h`;
 }
 
 function weeklyQuotaBar(theme: Theme, remaining: number): string {
@@ -514,12 +529,12 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 		`${theme.fg("dim", "ctx   ")}${contextLine}`,
 	];
 	if (model?.provider === "openai-codex") {
-		const remaining = state.codexWeeklyRemaining;
-		items.push(remaining === undefined
-			? `${theme.fg("dim", "week ")}${theme.fg("warning", "loading…")}`
-			: remaining === null
-				? `${theme.fg("dim", "week ")}${theme.fg("warning", "unavailable")}`
-				: `${theme.fg("dim", "week ")}${weeklyQuotaBar(theme, remaining)} ${theme.fg("accent", `${Math.round(remaining)}%`)}`);
+		const quota = state.codexWeeklyQuota;
+		items.push(quota === undefined
+			? `${theme.fg("dim", "week  ")}${theme.fg("warning", "loading…")}`
+			: quota === null
+				? `${theme.fg("dim", "week  ")}${theme.fg("warning", "unavailable")}`
+				: `${theme.fg("dim", "week  ")}${weeklyQuotaBar(theme, quota.remaining)} ${theme.fg("accent", `${Math.round(quota.remaining)}%`)}${quota.resetAt === undefined ? "" : theme.fg("dim", ` resets in ${formatQuotaReset(quota.resetAt)}`)}`);
 	}
 	return section(theme, "Conversation", items, width);
 }
@@ -789,7 +804,8 @@ export const __test__ = {
 	applyNumstat,
 	codexAccountId,
 	computeSessionStats,
-	parseCodexWeeklyRemaining,
+	formatQuotaReset,
+	parseCodexWeeklyQuota,
 	discoverRepositories,
 	isInsideLinkedWorktree,
 	parseNumstat,
@@ -887,7 +903,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 
 	const refreshCodexQuota = (ctx = state.ctx, force = false): Promise<void> => {
 		if (!ctx || ctx.model?.provider !== "openai-codex") {
-			state.codexWeeklyRemaining = undefined;
+			state.codexWeeklyQuota = undefined;
 			paint();
 			return Promise.resolve();
 		}
@@ -897,14 +913,14 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		}
 		const runGeneration = generation;
 		paint();
-		const promise = fetchCodexWeeklyRemaining(ctx)
-			.then((remaining) => {
+		const promise = fetchCodexWeeklyQuota(ctx)
+			.then((quota) => {
 				if (runGeneration !== generation || state.ctx?.model?.provider !== "openai-codex") return;
-				state.codexWeeklyRemaining = remaining ?? null;
+				state.codexWeeklyQuota = quota ?? null;
 			})
 			.catch(() => {
 				if (runGeneration !== generation || state.ctx?.model?.provider !== "openai-codex") return;
-				state.codexWeeklyRemaining = null;
+				state.codexWeeklyQuota = null;
 			});
 		quotaPromise = promise;
 		void promise.finally(() => {
@@ -927,7 +943,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		state.liveSpeed = undefined;
 		state.lastSpeed = undefined;
 		state.lastTool = undefined;
-		state.codexWeeklyRemaining = undefined;
+		state.codexWeeklyQuota = undefined;
 		state.activeTools.clear();
 		state.speedSamples = [];
 		updateSession(ctx);

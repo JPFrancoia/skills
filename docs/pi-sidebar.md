@@ -14,7 +14,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 
 - conversation name, with the first user message as fallback;
 - model, thinking level, cwd, and context use;
-- a weekly Codex headroom bar when Codex is active and account usage is available;
+- a weekly Codex headroom bar and reset countdown when Codex is active and account usage is available;
 - elapsed time, last response duration, output speed, turns, cost, tokens, cache hit rate, and active/last tool;
 - MCP adapter status and cached direct/total tool counts per configured server;
 - `rpiv-todo` tasks from the active session branch;
@@ -23,7 +23,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 
 The native footer and `rpiv-todo`'s above-editor widget are hidden because their data is shown in the sidebar.
 
-The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. It resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
+The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. Its value starts in the same column as the context percentage and ends with `resets in Xd`, or `resets in Xh` below one day. It resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
 
 ## Commands
 
