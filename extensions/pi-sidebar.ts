@@ -21,11 +21,14 @@ const MIN_MAIN_WIDTH = 70;
 const REFRESH_TICKS = 15;
 const TODO_WIDGET_KEY = "rpiv-todos";
 const WORKED_WORKTREE_ENTRY = "pi-sidebar-worktree-worked";
+const SUBAGENT_RUN_ENTRY = "pi-sidebar-subagent-run";
+const SUBAGENT_ASYNC_ENTRY = "pi-sidebar-subagent-async";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const WEEKLY_QUOTA_BAR_WIDTH = 10;
 const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
 const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
 const SUBAGENT_RPC_TIMEOUT_MS = 500;
+const SUBAGENT_LIFECYCLE_VERSION = 2;
 const PRUNED_DIRS = new Set([".cache", ".next", ".venv", "build", "dist", "node_modules", "target", "vendor", "venv"]);
 const GIT_REFRESH_TOOLS = new Set(["edit", "write"]);
 
@@ -93,9 +96,12 @@ type CodexWeeklyQuota = {
 	resetAt?: number;
 };
 
-type RunningSubagent = {
+type SubagentRun = {
 	key: string;
-	label: string;
+	agent: string;
+	running: boolean;
+	durationMs: number;
+	cost: number;
 };
 
 type SidebarState = {
@@ -119,8 +125,9 @@ type SidebarState = {
 	lastSpeed?: number;
 	lastTool?: string;
 	activeTools: Map<string, { name: string; startedAt: number }>;
-	asyncSubagents: RunningSubagent[];
-	foregroundSubagents: Map<string, RunningSubagent[]>;
+	subagentRuns: Map<string, SubagentRun>;
+	asyncRunDirs: Map<string, string>;
+	foregroundSubagents: Map<string, SubagentRun[]>;
 	speedSamples: Array<{ at: number; tokens: number }>;
 	sessionStartedAt: number;
 };
@@ -137,6 +144,10 @@ const EMPTY_STATS: SessionStats = {
 
 function number(value: unknown): number {
 	return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function addUsage(stats: SessionStats, usage: Usage | undefined): void {
@@ -208,6 +219,56 @@ function replayWorkedWorktrees(entries: readonly unknown[]): Set<string> {
 		if (typeof entry.data?.path === "string" && entry.data.path) paths.add(resolve(entry.data.path));
 	}
 	return paths;
+}
+
+function replaySubagents(entries: readonly unknown[]): { runs: Map<string, SubagentRun>; asyncRunDirs: Map<string, string> } {
+	const runs = new Map<string, SubagentRun>();
+	const asyncRunDirs = new Map<string, string>();
+	for (const [index, raw] of entries.entries()) {
+		const entry = raw as {
+			id?: unknown;
+			type?: string;
+			customType?: string;
+			data?: Record<string, unknown>;
+			details?: unknown;
+			message?: { role?: string; toolName?: string; toolCallId?: unknown; details?: unknown };
+		};
+		if (entry.type === "custom" && entry.customType === SUBAGENT_RUN_ENTRY) {
+			const data = entry.data;
+			if (!data || typeof data.key !== "string" || typeof data.agent !== "string" || !data.key || !data.agent) continue;
+			runs.set(data.key, {
+				key: data.key,
+				agent: sanitizePlainText(data.agent),
+				running: false,
+				durationMs: nonNegativeNumber(data.durationMs) ?? 0,
+				cost: nonNegativeNumber(data.cost) ?? 0,
+			});
+			continue;
+		}
+		if (entry.type === "custom" && entry.customType === SUBAGENT_ASYNC_ENTRY) {
+			const data = entry.data;
+			if (data && typeof data.runId === "string" && data.runId && typeof data.asyncDir === "string" && data.asyncDir) {
+				asyncRunDirs.set(data.runId, data.asyncDir);
+			}
+			continue;
+		}
+		let details: unknown;
+		let prefix: string | undefined;
+		if (entry.type === "custom_message" && entry.customType === "subagent-slash-result") {
+			const slash = entry.details && typeof entry.details === "object" ? entry.details as { requestId?: unknown; result?: { details?: unknown } } : undefined;
+			details = slash?.result?.details;
+			prefix = `slash:${typeof slash?.requestId === "string" ? slash.requestId : typeof entry.id === "string" ? entry.id : index}`;
+		} else if (entry.type === "message" && entry.message?.role === "toolResult" && entry.message.toolName === "subagent") {
+			details = entry.message.details;
+			prefix = `foreground:${typeof entry.message.toolCallId === "string" ? entry.message.toolCallId : typeof entry.id === "string" ? entry.id : index}`;
+		}
+		if (!prefix) continue;
+		const subagentDetails = details as { asyncId?: unknown; runId?: unknown; asyncDir?: unknown } | undefined;
+		const runId = typeof subagentDetails?.asyncId === "string" ? subagentDetails.asyncId : typeof subagentDetails?.runId === "string" ? subagentDetails.runId : undefined;
+		if (runId && typeof subagentDetails?.asyncDir === "string") asyncRunDirs.set(runId, subagentDetails.asyncDir);
+		for (const run of subagentRunsFromDetails(details, prefix, false)) runs.set(run.key, run);
+	}
+	return { runs, asyncRunDirs };
 }
 
 function textContent(content: unknown): string {
@@ -504,12 +565,17 @@ function sanitizePlainText(text: string): string {
 		.trim();
 }
 
-function parseRunningAsyncSubagents(text: string): RunningSubagent[] | undefined {
+function agentFromStatusLabel(value: string): string {
+	const label = sanitizePlainText(value).replace(/^\[[^\]]+\]\s*/, "");
+	return label.match(/\(([^()]+)\)$/)?.[1] ?? label;
+}
+
+function parseRunningAsyncSubagents(text: string): SubagentRun[] | undefined {
 	const lines = text.split("\n");
 	if (lines.includes("No active async runs.")) return [];
 	const heading = lines.findIndex((line) => line.startsWith("Active async runs:"));
 	if (heading < 0) return undefined;
-	const running: RunningSubagent[] = [];
+	const running: SubagentRun[] = [];
 	let runId = "unknown";
 	for (const line of lines.slice(heading + 1)) {
 		const run = line.match(/^- ([^ |]+) \|/);
@@ -519,34 +585,47 @@ function parseRunningAsyncSubagents(text: string): RunningSubagent[] | undefined
 		}
 		const step = line.match(/^\s+(\d+)\.\s+(.+?)\s+\|\s+running(?:\s+\||$)/);
 		if (!step) continue;
-		running.push({ key: `async:${runId}:${step[1]}`, label: sanitizePlainText(step[2]!) });
+		running.push({ key: `async:${runId}:${Number(step[1]!) - 1}`, agent: agentFromStatusLabel(step[2]!), running: true, durationMs: 0, cost: 0 });
 	}
 	return running;
 }
 
-function runningForegroundSubagents(details: unknown): RunningSubagent[] | undefined {
-	if (!details || typeof details !== "object") return undefined;
-	const value = details as { progress?: unknown; results?: unknown };
-	let entries: Array<{ agent?: unknown; label?: unknown; status?: unknown }> | undefined;
-	if (Array.isArray(value.progress)) {
-		entries = value.progress;
-	} else if (Array.isArray(value.results)) {
-		entries = value.results.map((result) => {
-			const item = result as { agent?: unknown; label?: unknown; progress?: unknown };
-			const progress = item.progress && typeof item.progress === "object" ? item.progress as Record<string, unknown> : {};
-			return { agent: progress.agent ?? item.agent, label: progress.label ?? item.label, status: progress.status };
+function subagentRunsFromDetails(details: unknown, prefix: string, runningOverride?: boolean): SubagentRun[] {
+	if (!details || typeof details !== "object") return [];
+	const value = details as { results?: unknown; progress?: unknown };
+	const results = Array.isArray(value.results) ? value.results : [];
+	const progress = Array.isArray(value.progress) ? value.progress : [];
+	const count = Math.max(results.length, progress.length);
+	const runs: SubagentRun[] = [];
+	for (let index = 0; index < count; index++) {
+		const result = results[index] && typeof results[index] === "object" ? results[index] as Record<string, unknown> : {};
+		const live = progress[index] && typeof progress[index] === "object" ? progress[index] as Record<string, unknown> : {};
+		const resultProgress = result.progress && typeof result.progress === "object" ? result.progress as Record<string, unknown> : {};
+		const summary = result.progressSummary && typeof result.progressSummary === "object" ? result.progressSummary as Record<string, unknown> : {};
+		const agentValue = live.agent ?? resultProgress.agent ?? result.agent;
+		if (typeof agentValue !== "string" || !agentValue) continue;
+		const usage = result.usage && typeof result.usage === "object" ? result.usage as Record<string, unknown> : {};
+		const totalCost = result.totalCost && typeof result.totalCost === "object" ? result.totalCost as Record<string, unknown> : {};
+		const status = live.status ?? resultProgress.status;
+		runs.push({
+			key: `${prefix}:${index}`,
+			agent: sanitizePlainText(agentValue),
+			running: runningOverride ?? status === "running",
+			durationMs: nonNegativeNumber(live.durationMs ?? resultProgress.durationMs ?? summary.durationMs) ?? 0,
+			cost: nonNegativeNumber(totalCost.costUsd ?? usage.cost) ?? 0,
 		});
 	}
-	if (!entries) return undefined;
-	return entries.flatMap((entry, index) => {
-		if (entry.status !== "running" || typeof entry.agent !== "string" || !entry.agent) return [];
-		const agent = sanitizePlainText(entry.agent);
-		const label = typeof entry.label === "string" && entry.label ? `${sanitizePlainText(entry.label)} (${agent})` : agent;
-		return [{ key: `foreground:${index}:${agent}`, label }];
-	});
+	return runs;
 }
 
-function initialForegroundSubagents(args: unknown): RunningSubagent[] {
+function runningForegroundSubagents(details: unknown): SubagentRun[] | undefined {
+	if (!details || typeof details !== "object") return undefined;
+	const value = details as { progress?: unknown; results?: unknown };
+	if (!Array.isArray(value.progress) && !Array.isArray(value.results)) return undefined;
+	return subagentRunsFromDetails(details, "foreground").filter((run) => run.running);
+}
+
+function initialForegroundSubagents(args: unknown): SubagentRun[] {
 	if (!args || typeof args !== "object") return [];
 	const value = args as { action?: unknown; agent?: unknown; async?: unknown; tasks?: unknown; chain?: unknown; concurrency?: unknown };
 	if (value.action !== undefined || value.async === true) return [];
@@ -563,12 +642,54 @@ function initialForegroundSubagents(args: unknown): RunningSubagent[] {
 	}
 	const concurrency = typeof value.concurrency === "number" && value.concurrency > 0 ? Math.floor(value.concurrency) : 4;
 	return candidates.slice(0, concurrency).flatMap((candidate, index) => {
-		const task = candidate as { agent?: unknown; label?: unknown };
+		const task = candidate as { agent?: unknown };
 		if (typeof task.agent !== "string" || !task.agent) return [];
-		const agent = sanitizePlainText(task.agent);
-		const label = typeof task.label === "string" && task.label ? `${sanitizePlainText(task.label)} (${agent})` : agent;
-		return [{ key: `foreground:${index}:${agent}`, label }];
+		return [{ key: `foreground:${index}`, agent: sanitizePlainText(task.agent), running: true, durationMs: 0, cost: 0 }];
 	});
+}
+
+function subagentRunsFromAsyncStatus(value: unknown, runId: string, sessionId: string | undefined, now = Date.now()): SubagentRun[] | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const status = value as { lifecycleArtifactVersion?: unknown; runId?: unknown; sessionId?: unknown; steps?: unknown };
+	if (status.lifecycleArtifactVersion !== SUBAGENT_LIFECYCLE_VERSION || status.runId !== runId) return undefined;
+	if (sessionId && status.sessionId !== sessionId) return undefined;
+	if (!Array.isArray(status.steps)) return undefined;
+	const runs: SubagentRun[] = [];
+	for (const [index, raw] of status.steps.entries()) {
+		if (!raw || typeof raw !== "object") return undefined;
+		const step = raw as Record<string, unknown>;
+		if (step.status === "pending") continue;
+		if (typeof step.agent !== "string" || !step.agent) return undefined;
+		const totalCost = step.totalCost && typeof step.totalCost === "object" ? step.totalCost as Record<string, unknown> : {};
+		const cost = totalCost.costUsd === undefined ? 0 : nonNegativeNumber(totalCost.costUsd);
+		const running = step.status === "running";
+		const startedAt = nonNegativeNumber(step.startedAt);
+		const recordedDuration = step.durationMs === undefined ? 0 : nonNegativeNumber(step.durationMs);
+		if (cost === undefined || recordedDuration === undefined) return undefined;
+		const durationMs = running && startedAt !== undefined ? Math.max(recordedDuration, now - startedAt) : recordedDuration;
+		runs.push({ key: `async:${runId}:${index}`, agent: sanitizePlainText(step.agent), running, durationMs, cost });
+	}
+	return runs;
+}
+
+function aggregateSubagents(runs: Iterable<SubagentRun>): SubagentRun[] {
+	const grouped = new Map<string, SubagentRun>();
+	for (const run of runs) {
+		if (!run.agent) continue;
+		const current = grouped.get(run.agent);
+		if (current) {
+			current.running ||= run.running;
+			current.durationMs += run.durationMs;
+			current.cost += run.cost;
+		} else {
+			grouped.set(run.agent, { key: run.agent, agent: run.agent, running: run.running, durationMs: run.durationMs, cost: run.cost });
+		}
+	}
+	return [...grouped.values()];
+}
+
+function formatSubagentDuration(ms: number): string {
+	return formatDuration(ms).replace(/m0s$/, "m");
 }
 
 function codexAccountId(accessToken: string): string | undefined {
@@ -742,13 +863,10 @@ function mcpItems(state: SidebarState, theme: Theme, statuses: ReadonlyMap<strin
 }
 
 function subagentItems(state: SidebarState, theme: Theme): string[] {
-	const running = [
-		...[...state.foregroundSubagents.values()].flatMap((items) => items),
-		...state.asyncSubagents,
-	];
-	return running.length
-		? running.map((item) => `${theme.fg("accent", "●")} ${theme.fg("text", sanitizePlainText(item.label))}`)
-		: [theme.fg("dim", "(none running)")];
+	const agents = aggregateSubagents(state.subagentRuns.values());
+	return agents.length
+		? agents.map((agent) => `${theme.fg(agent.running ? "success" : "error", "●")} ${theme.fg("text", sanitizePlainText(agent.agent))} ${theme.fg("dim", `${formatSubagentDuration(agent.durationMs)} · $${agent.cost.toFixed(4)}`)}`)
+		: [theme.fg("dim", "(none used)")];
 }
 
 function todoItems(state: SidebarState, theme: Theme): { title: string; items: string[] } {
@@ -958,6 +1076,10 @@ async function refreshOneRepo(pi: ExtensionAPI, root: string, path: string, link
 	return { path, label, branch: parsed.branch || "detached", files };
 }
 
+function subagentSessionId(ctx: ExtensionContext | undefined): string | undefined {
+	return ctx?.sessionManager.getSessionFile() ?? ctx?.sessionManager.getSessionId() ?? undefined;
+}
+
 function sessionStartTime(ctx: ExtensionContext): number {
 	const header = ctx.sessionManager.getHeader?.() as { timestamp?: string } | undefined;
 	const timestamp = header?.timestamp ? Date.parse(header.timestamp) : Number.NaN;
@@ -980,8 +1102,13 @@ export const __test__ = {
 	renderSidebar,
 	runningForegroundSubagents,
 	initialForegroundSubagents,
+	subagentRunsFromDetails,
+	subagentRunsFromAsyncStatus,
+	aggregateSubagents,
+	formatSubagentDuration,
 	serverMap,
 	cleanStatusText,
+	replaySubagents,
 	replayTodos,
 	replayWorkedWorktrees,
 	SidebarCompositor,
@@ -1000,7 +1127,8 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
 		activeTools: new Map(),
-		asyncSubagents: [],
+		subagentRuns: new Map(),
+		asyncRunDirs: new Map(),
 		foregroundSubagents: new Map(),
 		speedSamples: [],
 		sessionStartedAt: Date.now(),
@@ -1013,6 +1141,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	let refreshPromise: Promise<void> | undefined;
 	let quotaPromise: Promise<void> | undefined;
 	let subagentStatusPromise: Promise<void> | undefined;
+	let asyncMetricsPromise: Promise<void> | undefined;
 	let discoveryCache: { root: string; value: RepoDiscovery } | undefined;
 	let worktreeSignatures = new Map<string, string>();
 	let generation = 0;
@@ -1030,6 +1159,50 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	};
 	const hideTodoWidget = (ctx: ExtensionContext) => {
 		try { ctx.ui.setWidget(TODO_WIDGET_KEY, undefined); } catch { /* stale replacement context */ }
+	};
+	const persistSubagentRun = (run: SubagentRun) => {
+		pi.appendEntry(SUBAGENT_RUN_ENTRY, { key: run.key, agent: run.agent, durationMs: run.durationMs, cost: run.cost });
+	};
+	const rememberSubagentRun = (run: SubagentRun, persist = false) => {
+		const previous = state.subagentRuns.get(run.key);
+		state.subagentRuns.set(run.key, run);
+		if (persist && (!previous || previous.agent !== run.agent || previous.durationMs !== run.durationMs || previous.cost !== run.cost)) persistSubagentRun(run);
+	};
+	const rememberAsyncDir = (runId: string, asyncDir: string, persist = false) => {
+		if (!runId || !asyncDir || state.asyncRunDirs.get(runId) === asyncDir) return;
+		state.asyncRunDirs.set(runId, asyncDir);
+		if (persist) pi.appendEntry(SUBAGENT_ASYNC_ENTRY, { runId, asyncDir });
+	};
+	const refreshAsyncMetrics = (): Promise<void> => {
+		if (asyncMetricsPromise) return asyncMetricsPromise;
+		const runGeneration = generation;
+		const sessionId = subagentSessionId(state.ctx);
+		const promise = Promise.all([...state.asyncRunDirs].map(async ([runId, asyncDir]) => {
+			try {
+				return { runId, runs: subagentRunsFromAsyncStatus(JSON.parse(await readFile(join(asyncDir, "status.json"), "utf8")), runId, sessionId) };
+			} catch {
+				return { runId, runs: undefined };
+			}
+		})).then((statuses) => {
+			if (runGeneration !== generation) return;
+			for (const { runId, runs } of statuses) {
+				if (!runs) continue;
+				const seen = new Set(runs.map((run) => run.key));
+				for (const run of runs) {
+					const previous = state.subagentRuns.get(run.key);
+					rememberSubagentRun(run, !previous || (!run.running && (previous.running || previous.durationMs !== run.durationMs || previous.cost !== run.cost)));
+				}
+				for (const [key, previous] of state.subagentRuns) {
+					if (key.startsWith(`async:${runId}:`) && !seen.has(key) && previous.running) state.subagentRuns.set(key, { ...previous, running: false });
+				}
+			}
+		});
+		asyncMetricsPromise = promise;
+		void promise.finally(() => {
+			if (asyncMetricsPromise === promise) asyncMetricsPromise = undefined;
+			if (runGeneration === generation) paint();
+		});
+		return promise;
 	};
 	const requestSubagentStatus = (): Promise<string | undefined> => new Promise((resolveStatus) => {
 		const requestId = `pi-sidebar-${generation}-${++subagentRequestSequence}`;
@@ -1063,7 +1236,15 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		const promise = requestSubagentStatus().then((text) => {
 			if (runGeneration !== generation || text === undefined) return;
 			const running = parseRunningAsyncSubagents(text);
-			if (running !== undefined) state.asyncSubagents = running;
+			if (running === undefined) return;
+			const active = new Set(running.map((run) => run.key));
+			for (const [key, previous] of state.subagentRuns) {
+				if (key.startsWith("async:") && previous.running && !active.has(key)) state.subagentRuns.set(key, { ...previous, running: false });
+			}
+			for (const run of running) {
+				const previous = state.subagentRuns.get(run.key);
+				rememberSubagentRun(previous ? { ...previous, agent: run.agent, running: true } : run, !previous);
+			}
 		});
 		subagentStatusPromise = promise;
 		void promise.finally(() => {
@@ -1164,11 +1345,26 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		return promise;
 	};
 
-	const disposeAsyncStarted = pi.events.on("subagent:async-started", () => void refreshSubagents());
+	const disposeAsyncStarted = pi.events.on("subagent:async-started", (raw) => {
+		const event = raw as { id?: unknown; asyncDir?: unknown; sessionId?: unknown };
+		const sessionId = subagentSessionId(state.ctx);
+		if (sessionId && event.sessionId !== sessionId) return;
+		if (typeof event.id === "string" && typeof event.asyncDir === "string") rememberAsyncDir(event.id, event.asyncDir, true);
+		void refreshAsyncMetrics();
+		void refreshSubagents();
+	});
 	const disposeAsyncComplete = pi.events.on("subagent:async-complete", (raw) => {
-		const event = raw as { runId?: unknown; id?: unknown };
+		const event = raw as { runId?: unknown; id?: unknown; asyncDir?: unknown; sessionId?: unknown };
+		const sessionId = subagentSessionId(state.ctx);
+		if (sessionId && event.sessionId !== sessionId) return;
 		const runId = typeof event.runId === "string" ? event.runId : typeof event.id === "string" ? event.id : undefined;
-		if (runId) state.asyncSubagents = state.asyncSubagents.filter((item) => !item.key.startsWith(`async:${runId}:`));
+		if (runId && typeof event.asyncDir === "string") rememberAsyncDir(runId, event.asyncDir, true);
+		if (runId) {
+			for (const [key, run] of state.subagentRuns) {
+				if (key.startsWith(`async:${runId}:`)) state.subagentRuns.set(key, { ...run, running: false });
+			}
+		}
+		void refreshAsyncMetrics();
 		void refreshSubagents();
 	});
 
@@ -1177,9 +1373,13 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		refreshPromise = undefined;
 		quotaPromise = undefined;
 		subagentStatusPromise = undefined;
+		asyncMetricsPromise = undefined;
 		discoveryCache = undefined;
 		worktreeSignatures.clear();
 		state.workedWorktrees = replayWorkedWorktrees(ctx.sessionManager.getBranch());
+		const replayedSubagents = replaySubagents(ctx.sessionManager.getBranch());
+		state.subagentRuns = replayedSubagents.runs;
+		state.asyncRunDirs = replayedSubagents.asyncRunDirs;
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		footerFallbackTimer = undefined;
 		state.sessionStartedAt = sessionStartTime(ctx);
@@ -1190,7 +1390,6 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		state.lastTool = undefined;
 		state.codexWeeklyQuota = undefined;
 		state.activeTools.clear();
-		state.asyncSubagents = [];
 		state.foregroundSubagents.clear();
 		state.speedSamples = [];
 		updateSession(ctx);
@@ -1232,12 +1431,14 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		let ticks = 0;
 		tickTimer = setInterval(() => {
 			paint();
+			void refreshAsyncMetrics();
 			void refreshSubagents();
 			if (++ticks % REFRESH_TICKS === 0) void refreshExternal();
 		}, 1_000);
 		tickTimer.unref?.();
 		void refreshExternal(ctx);
 		void refreshCodexQuota(ctx);
+		void refreshAsyncMetrics();
 		void refreshSubagents();
 	});
 
@@ -1249,8 +1450,12 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 
 	const replaySession = async (_event: unknown, ctx: ExtensionContext) => {
 		state.workedWorktrees = replayWorkedWorktrees(ctx.sessionManager.getBranch());
+		const replayedSubagents = replaySubagents(ctx.sessionManager.getBranch());
+		state.subagentRuns = replayedSubagents.runs;
+		state.asyncRunDirs = replayedSubagents.asyncRunDirs;
 		updateSession(ctx);
 		void refreshExternal(ctx);
+		void refreshAsyncMetrics();
 		paint();
 	};
 	pi.on("session_tree", replaySession);
@@ -1309,28 +1514,49 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		state.ctx = ctx;
 		if (event.toolName === "todo" && isTodoDetails(event.details)) state.todos = event.details.tasks.map((task) => ({ ...task }));
-		if (event.toolName === "subagent") void refreshSubagents();
+		if (event.toolName === "subagent") {
+			const details = event.details as { asyncId?: unknown; runId?: unknown; asyncDir?: unknown } | undefined;
+			const runId = typeof details?.asyncId === "string" ? details.asyncId : typeof details?.runId === "string" ? details.runId : undefined;
+			if (runId && typeof details?.asyncDir === "string") rememberAsyncDir(runId, details.asyncDir, true);
+			for (const run of subagentRunsFromDetails(event.details, `foreground:${event.toolCallId}`, false)) rememberSubagentRun(run, true);
+			void refreshAsyncMetrics();
+			void refreshSubagents();
+		}
 		if (GIT_REFRESH_TOOLS.has(event.toolName)) void refreshExternal(ctx);
 		paint();
 	});
 	pi.on("tool_execution_start", async (event, ctx) => {
 		state.ctx = ctx;
 		state.activeTools.set(event.toolCallId, { name: event.toolName, startedAt: Date.now() });
-		if (event.toolName === "subagent") state.foregroundSubagents.set(event.toolCallId, initialForegroundSubagents(event.args));
+		if (event.toolName === "subagent") {
+			const initial = initialForegroundSubagents(event.args).map((run, index) => ({ ...run, key: `foreground:${event.toolCallId}:${index}` }));
+			state.foregroundSubagents.set(event.toolCallId, initial);
+			for (const run of initial) rememberSubagentRun(run, true);
+		}
 		state.lastTool = event.toolName;
 		paint();
 	});
 	pi.on("tool_execution_update", async (event) => {
 		if (event.toolName !== "subagent") return;
 		const partial = event.partialResult as { details?: unknown } | undefined;
-		const running = runningForegroundSubagents(partial?.details);
-		if (running !== undefined) state.foregroundSubagents.set(event.toolCallId, running);
+		const runs = subagentRunsFromDetails(partial?.details, `foreground:${event.toolCallId}`);
+		if (runs.length) {
+			state.foregroundSubagents.set(event.toolCallId, runs);
+			for (const run of runs) rememberSubagentRun(run);
+		}
 		paint();
 	});
 	pi.on("tool_execution_end", async (event) => {
 		state.activeTools.delete(event.toolCallId);
+		for (const run of state.foregroundSubagents.get(event.toolCallId) ?? []) {
+			const current = state.subagentRuns.get(run.key);
+			if (current?.running) state.subagentRuns.set(run.key, { ...current, running: false });
+		}
 		state.foregroundSubagents.delete(event.toolCallId);
-		if (event.toolName === "subagent") void refreshSubagents();
+		if (event.toolName === "subagent") {
+			void refreshAsyncMetrics();
+			void refreshSubagents();
+		}
 		paint();
 	});
 	pi.on("agent_end", async (_event, ctx) => {
@@ -1352,6 +1578,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		tickTimer = undefined;
 		quotaPromise = undefined;
 		subagentStatusPromise = undefined;
+		asyncMetricsPromise = undefined;
 		todoHideTimer = undefined;
 		footerFallbackTimer = undefined;
 		compositor?.dispose();
@@ -1376,7 +1603,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 				}
 				state.width = width;
 			} else if (action === "refresh") {
-				await Promise.all([refreshExternal(ctx, true), refreshCodexQuota(ctx, true)]);
+				await Promise.all([refreshExternal(ctx, true), refreshCodexQuota(ctx, true), refreshAsyncMetrics(), refreshSubagents()]);
 				ctx.ui.notify("Sidebar refreshed.", "info");
 				return;
 			} else if (action === "status") {

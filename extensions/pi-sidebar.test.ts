@@ -128,8 +128,8 @@ async function main(): Promise<void> {
 		"  1. Planner | completed",
 		"  2. [Validation] Review diff (reviewer) | running | active",
 	].join("\n")), [
-		{ key: "async:run-one:1", label: "scout" },
-		{ key: "async:run-two:2", label: "[Validation] Review diff (reviewer)" },
+		{ key: "async:run-one:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
+		{ key: "async:run-two:1", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
 	]);
 	assert.deepEqual(__test__.parseRunningAsyncSubagents("Spawn budget: unlimited\nNo active async runs."), []);
 	assert.equal(__test__.parseRunningAsyncSubagents("Run: foreground\nState: running"), undefined);
@@ -138,25 +138,75 @@ async function main(): Promise<void> {
 		{ agent: "reviewer", label: "Review", status: "running" },
 		{ agent: "planner", status: "pending" },
 	] }), [
-		{ key: "foreground:0:scout", label: "scout" },
-		{ key: "foreground:1:reviewer", label: "Review (reviewer)" },
+		{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
+		{ key: "foreground:1", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
 	]);
-	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout" }), [{ key: "foreground:0:scout", label: "scout" }]);
+	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout" }), [{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 }]);
 	assert.deepEqual(__test__.initialForegroundSubagents({ tasks: [
 		{ agent: "scout", count: 2 },
 		{ agent: "reviewer", label: "Review" },
 	], concurrency: 2 }), [
-		{ key: "foreground:0:scout", label: "scout" },
-		{ key: "foreground:1:scout", label: "scout" },
+		{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
+		{ key: "foreground:1", agent: "scout", running: true, durationMs: 0, cost: 0 },
 	]);
 	assert.deepEqual(__test__.initialForegroundSubagents({ chain: [{ parallel: [
 		{ agent: "scout" },
 		{ agent: "reviewer", label: "Review" },
 	] }] }), [
-		{ key: "foreground:0:scout", label: "scout" },
-		{ key: "foreground:1:reviewer", label: "Review (reviewer)" },
+		{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
+		{ key: "foreground:1", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
 	]);
 	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout", async: true }), []);
+	assert.deepEqual(__test__.subagentRunsFromDetails({
+		results: [
+			{ agent: "worker", usage: { cost: 0.2 }, progressSummary: { durationMs: 60_000 } },
+			{ agent: "reviewer", totalCost: { costUsd: 0.03 }, progress: { status: "completed", durationMs: 5_000 } },
+		],
+		progress: [
+			{ agent: "worker", status: "running", durationMs: 65_000 },
+			{ agent: "reviewer", status: "completed", durationMs: 5_000 },
+		],
+	}, "foreground:call"), [
+		{ key: "foreground:call:0", agent: "worker", running: true, durationMs: 65_000, cost: 0.2 },
+		{ key: "foreground:call:1", agent: "reviewer", running: false, durationMs: 5_000, cost: 0.03 },
+	]);
+	assert.deepEqual(__test__.subagentRunsFromAsyncStatus({
+		lifecycleArtifactVersion: 2,
+		runId: "run-1",
+		sessionId: "session-1",
+		steps: [
+			{ agent: "worker", status: "running", startedAt: 1_000, durationMs: 0, totalCost: { costUsd: 0.1 } },
+			{ agent: "worker", status: "complete", durationMs: 60_000, totalCost: { costUsd: 0.2 } },
+			{ agent: "planner", status: "pending" },
+		],
+	}, "run-1", "session-1", 11_000), [
+		{ key: "async:run-1:0", agent: "worker", running: true, durationMs: 10_000, cost: 0.1 },
+		{ key: "async:run-1:1", agent: "worker", running: false, durationMs: 60_000, cost: 0.2 },
+	]);
+	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "run-1", sessionId: "other", steps: [] }, "run-1", "session-1"), undefined);
+	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 1, runId: "run-1", sessionId: "session-1", steps: [] }, "run-1", "session-1"), undefined);
+	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "wrong", sessionId: "session-1", steps: [] }, "run-1", "session-1"), undefined);
+	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "run-1", sessionId: "session-1", steps: [{ agent: "worker", status: "complete", durationMs: -1 }] }, "run-1", "session-1"), undefined);
+	const aggregated = __test__.aggregateSubagents([
+		{ key: "one", agent: "worker", running: false, durationMs: 60_000, cost: 0.2337 },
+		{ key: "two", agent: "worker", running: true, durationMs: 46_000, cost: 0.2323 },
+		{ key: "three", agent: "reviewer", running: false, durationMs: 5_000, cost: 0.03 },
+	]);
+	assert.deepEqual(aggregated.map(({ cost: _cost, ...agent }) => agent), [
+		{ key: "worker", agent: "worker", running: true, durationMs: 106_000 },
+		{ key: "reviewer", agent: "reviewer", running: false, durationMs: 5_000 },
+	]);
+	assert.ok(Math.abs(aggregated[0]!.cost - 0.466) < 1e-12);
+	assert.equal(aggregated[1]!.cost, 0.03);
+	assert.equal(__test__.formatSubagentDuration(60_000), "1m");
+	assert.equal(__test__.formatSubagentDuration(106_000), "1m46s");
+	const replayedSubagents = __test__.replaySubagents([
+		{ type: "custom", customType: "pi-sidebar-subagent-run", data: { key: "one", agent: "worker", durationMs: 10_000, cost: 0.1 } },
+		{ type: "custom", customType: "pi-sidebar-subagent-run", data: { key: "one", agent: "worker", durationMs: 60_000, cost: 0.2 } },
+		{ type: "custom_message", customType: "subagent-slash-result", details: { requestId: "slash-1", result: { details: { asyncId: "run-1", asyncDir: "/tmp/run-1", results: [] } } } },
+	]);
+	assert.deepEqual([...replayedSubagents.runs.values()], [{ key: "one", agent: "worker", running: false, durationMs: 60_000, cost: 0.2 }]);
+	assert.deepEqual([...replayedSubagents.asyncRunDirs], [["run-1", "/tmp/run-1"]]);
 	const token = [
 		"header",
 		Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account-123" } })).toString("base64url"),
@@ -218,7 +268,8 @@ async function main(): Promise<void> {
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
 		activeTools: new Map(),
-		asyncSubagents: [],
+		subagentRuns: new Map(),
+		asyncRunDirs: new Map(),
 		foregroundSubagents: new Map(),
 		speedSamples: [],
 		sessionStartedAt: Date.now(),
@@ -255,17 +306,25 @@ async function main(): Promise<void> {
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.doesNotMatch(lines.join("\n"), /clean-sibling/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
-	assert.match(lines.join("\n"), /Subagents\n─+\n\(none running\)/);
+	assert.match(lines.join("\n"), /Subagents\n─+\n\(none used\)/);
 	const fullLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 100);
 	const gitHeaderIndex = fullLines.indexOf("repo");
 	assert.equal(fullLines[gitHeaderIndex + 1], "• main spoofed");
 	const subagentsIndex = fullLines.indexOf("Subagents");
 	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 48, subagentsIndex + 2).join("\n"), /Subagents/);
-	state.asyncSubagents = [{ key: "async:run:1", label: "scout\x1b[2J\nspoofed" }];
-	const subagentLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n");
-	assert.match(subagentLines, /Subagents\n─+\n● scout spoofed/);
+	state.subagentRuns.set("async:run:0", { key: "async:run:0", agent: "scout\x1b[2J\nspoofed", running: false, durationMs: 60_000, cost: 0.2337 });
+	const colorTheme = {
+		...theme,
+		fg: (color: string, text: string) => `\x1b[${color === "success" ? 32 : color === "error" ? 31 : 37}m${text}\x1b[0m`,
+	};
+	const subagentLines = __test__.renderSidebar(state as never, colorTheme as never, new Map(), 48, 40).join("\n");
+	assert.match(subagentLines, /\x1b\[31m●/);
+	assert.match(subagentLines, /scout spoofed/);
+	assert.match(subagentLines, /1m · \$0\.2337/);
 	assert.doesNotMatch(subagentLines, /\x1b\[2J/);
-	state.asyncSubagents = [];
+	state.subagentRuns.set("async:run:0", { ...state.subagentRuns.get("async:run:0"), running: true });
+	assert.match(__test__.renderSidebar(state as never, colorTheme as never, new Map(), 48, 40).join("\n"), /\x1b\[32m●/);
+	state.subagentRuns.clear();
 	state.ctx = { cwd: "/repo", model: { id: "gpt-5.6", provider: "openai-codex" } };
 	state.codexWeeklyQuota = { remaining: 83, resetAt: Date.now() + 6.5 * 86_400_000 };
 	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
