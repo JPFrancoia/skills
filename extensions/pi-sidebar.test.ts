@@ -31,11 +31,12 @@ async function main(): Promise<void> {
 		{ type: "message", message: { role: "assistant", usage: { input: 10, output: 3, cacheRead: 5, cacheWrite: 2, cost: { total: 0.1 } } } },
 		{ type: "message", message: { role: "toolResult", usage: { input: 2, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.02 } } } },
 		{ type: "compaction", usage: { input: 4, output: 2, cacheRead: 1, cacheWrite: 0, cost: { total: 0.03 } } },
+		{ type: "compaction" },
 		{ type: "message", message: { role: "assistant", usage: { input: 20, output: 5, cacheRead: 10, cacheWrite: 0, cost: { total: 0.2 } } } },
 	]);
 	assert.deepEqual(
-		{ input: stats.input, output: stats.output, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite, turns: stats.turns, cost: stats.cost },
-		{ input: 36, output: 11, cacheRead: 16, cacheWrite: 2, turns: 2, cost: 0.35000000000000003 },
+		{ input: stats.input, output: stats.output, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite, turns: stats.turns, compactions: stats.compactions, cost: stats.cost },
+		{ input: 36, output: 11, cacheRead: 16, cacheWrite: 2, turns: 2, compactions: 2, cost: 0.35000000000000003 },
 	);
 	assert.ok(Math.abs((stats.cacheHitPercent ?? 0) - (100 / 3)) < 0.001);
 
@@ -147,9 +148,9 @@ async function main(): Promise<void> {
 	const originalRender = tui.doRender;
 	const state: any = {
 		enabled: true,
-		width: 42,
+		width: 48,
 		thinkingLevel: "high",
-		stats: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+		stats: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, compactions: 2 },
 		todos: [],
 		mcpServers: [],
 		gitRepos: [],
@@ -160,7 +161,7 @@ async function main(): Promise<void> {
 	};
 	const compositor = new __test__.SidebarCompositor(tui as never, () => state as never, () => theme as never, () => new Map());
 	assert.equal(compositor.install(), true);
-	assert.equal(terminal.columns, 77);
+	assert.equal(terminal.columns, 71);
 	tui.doRender();
 	assert.equal(renders, 1);
 	assert.match(terminal.writes.join(""), /\x1b\[\?2026h/);
@@ -182,23 +183,25 @@ async function main(): Promise<void> {
 		branch: "clean-sibling",
 		files: [],
 	}];
-	const lines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 24);
+	const lines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 24);
 	assert.ok(lines.length <= 24);
-	assert.ok(lines.every((line) => visibleWidth(line) <= 42 && !line.includes("\n")));
+	assert.ok(lines.every((line) => visibleWidth(line) <= 48 && !line.includes("\n")));
+	const contextIndex = lines.findIndex((line) => line.startsWith("ctx "));
+	assert.equal(lines[contextIndex + 1], "compactions  2");
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.doesNotMatch(lines.join("\n"), /clean-sibling/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
 	state.ctx = { cwd: "/repo", model: { id: "gpt-5.6", provider: "openai-codex" } };
 	state.codexWeeklyQuota = { remaining: 83, resetAt: Date.now() + 6.5 * 86_400_000 };
-	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);
+	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
 	assert.match(quotaLines.join("\n"), /week  ████████░░ 83% resets in 6d/);
 	state.codexWeeklyQuota = undefined;
-	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week  loading…/);
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week  loading…/);
 	state.codexWeeklyQuota = null;
-	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week  unavailable/);
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week  unavailable/);
 	state.ctx.model.provider = "anthropic";
-	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week /);
-	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);
+	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week /);
+	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
 	for (const title of ["Conversation", "Stats", "Todos (0/0)", "Git"]) {
 		assert.equal(spacedLines[spacedLines.indexOf(title) - 1], "");
 	}

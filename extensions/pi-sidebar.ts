@@ -16,7 +16,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-const DEFAULT_WIDTH = 42;
+const DEFAULT_WIDTH = 48;
 const MIN_MAIN_WIDTH = 70;
 const REFRESH_TICKS = 15;
 const TODO_WIDGET_KEY = "rpiv-todos";
@@ -40,6 +40,7 @@ type SessionStats = {
 	cacheWrite: number;
 	cost: number;
 	turns: number;
+	compactions: number;
 	cacheHitPercent?: number;
 };
 
@@ -119,6 +120,7 @@ const EMPTY_STATS: SessionStats = {
 	cacheWrite: 0,
 	cost: 0,
 	turns: 0,
+	compactions: 0,
 };
 
 function number(value: unknown): number {
@@ -144,6 +146,7 @@ function computeSessionStats(entries: readonly unknown[]): SessionStats {
 			usage?: Usage;
 			message?: { role?: string; usage?: Usage };
 		};
+		if (entry.type === "compaction") stats.compactions++;
 		if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 			addUsage(stats, entry.usage);
 			continue;
@@ -549,6 +552,7 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 		modelLine,
 		`${theme.fg("dim", "cwd   ")}${location}`,
 		`${theme.fg("dim", "ctx   ")}${contextLine}`,
+		`${theme.fg("dim", "compactions  ")}${state.stats.compactions}`,
 	];
 	if (model?.provider === "openai-codex") {
 		const quota = state.codexWeeklyQuota;

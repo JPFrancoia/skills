@@ -13,7 +13,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 ## Displayed data
 
 - conversation name, with the first user message as fallback;
-- model, thinking level, cwd, and context use;
+- model, thinking level, cwd, context use, and conversation compaction count;
 - a weekly Codex headroom bar and reset countdown when Codex is active and account usage is available;
 - elapsed time, last response duration, output speed, turns, cost, tokens, cache hit rate, and active/last tool;
 - MCP adapter status and cached direct/total tool counts per configured server;
@@ -36,7 +36,7 @@ The weekly Codex bar is the overall account percentage remaining, not usage attr
 /sidebar status          Show current state, width, and repository count
 ```
 
-The default width is 42 columns. The sidebar automatically hides when showing it would leave fewer than 70 columns for Pi.
+The default width is 48 columns. The sidebar automatically hides when showing it would leave fewer than 70 columns for Pi.
 
 ## Git discovery
 
