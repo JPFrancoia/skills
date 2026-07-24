@@ -143,6 +143,10 @@ async function main(): Promise<void> {
 	assert.ok(lines.every((line) => visibleWidth(line) <= 42 && !line.includes("\n")));
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
+	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);
+	for (const title of ["Conversation", "Stats", "Todos (0/0)", "Git"]) {
+		assert.equal(spacedLines[spacedLines.indexOf(title) - 1], "");
+	}
 }
 
 await main();

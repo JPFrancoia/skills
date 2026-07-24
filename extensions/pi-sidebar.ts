@@ -420,7 +420,7 @@ function plainPad(text: string, width: number): string {
 }
 
 function section(theme: Theme, title: string, items: string[], width: number): string[] {
-	return [theme.fg("text", theme.bold(title)), theme.fg("borderMuted", "─".repeat(width)), ...items];
+	return ["", theme.fg("text", theme.bold(title)), theme.fg("borderMuted", "─".repeat(width)), ...items];
 }
 
 function fitSection(
@@ -434,8 +434,8 @@ function fitSection(
 ): void {
 	if (items.length === 0) return;
 	const available = height - lines.length - reserve;
-	if (available < 3) return;
-	let shown = items.slice(0, available - 2);
+	if (available < 4) return;
+	let shown = items.slice(0, available - 3);
 	if (shown.length < items.length && shown.length > 0) {
 		shown = items.slice(0, Math.max(0, shown.length - 1));
 		shown.push(theme.fg("dim", `… ${items.length - shown.length} more`));
@@ -593,9 +593,9 @@ function renderSidebar(
 	const extensions = extensionItems(theme, statuses);
 	const git = gitItems(state, theme, width);
 	const optionalSections = (state.mcpServers.length || statuses.has("mcp") ? 1 : 0) + 1 + (extensions.length ? 1 : 0);
-	fitSection(lines, theme, "MCP Servers", mcpItems(state, theme, statuses), width, height, 4 + (optionalSections - 1) * 3);
-	fitSection(lines, theme, todos.title, todos.items, width, height, 4 + (extensions.length ? 3 : 0));
-	fitSection(lines, theme, "Extensions", extensions, width, height, 4);
+	fitSection(lines, theme, "MCP Servers", mcpItems(state, theme, statuses), width, height, 5 + (optionalSections - 1) * 4);
+	fitSection(lines, theme, todos.title, todos.items, width, height, 5 + (extensions.length ? 4 : 0));
+	fitSection(lines, theme, "Extensions", extensions, width, height, 5);
 	fitSection(lines, theme, "Git", git, width, height, 0);
 	return lines.slice(0, height);
 }
