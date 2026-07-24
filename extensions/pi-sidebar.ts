@@ -784,9 +784,8 @@ function gitItems(state: SidebarState, theme: Theme, width: number): string[] {
 		if (items.length > 0) items.push("");
 		const safeBranch = sanitizePlainText(repo.branch);
 		const safeLabel = sanitizePlainText(repo.label);
-		const branch = ` • ${safeBranch}`;
-		const label = truncatePath(safeLabel, Math.max(1, width - visibleWidth(branch)));
-		items.push(`${theme.fg("accent", label)}${theme.fg("dim", branch)}`);
+		items.push(theme.fg("accent", truncatePath(safeLabel, width)));
+		items.push(theme.fg("dim", truncateToWidth(`• ${safeBranch}`, width, "…")));
 		if (repo.error) {
 			items.push(theme.fg("warning", repo.error));
 			continue;

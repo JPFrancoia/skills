@@ -257,6 +257,8 @@ async function main(): Promise<void> {
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
 	assert.match(lines.join("\n"), /Subagents\n─+\n\(none running\)/);
 	const fullLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 100);
+	const gitHeaderIndex = fullLines.indexOf("repo");
+	assert.equal(fullLines[gitHeaderIndex + 1], "• main spoofed");
 	const subagentsIndex = fullLines.indexOf("Subagents");
 	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 48, subagentsIndex + 2).join("\n"), /Subagents/);
 	state.asyncSubagents = [{ key: "async:run:1", label: "scout\x1b[2J\nspoofed" }];
