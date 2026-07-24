@@ -14,6 +14,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 
 - conversation name, with the first user message as fallback;
 - model, thinking level, cwd, and context use;
+- a weekly Codex headroom bar when Codex is active and account usage is available;
 - elapsed time, last response duration, output speed, turns, cost, tokens, cache hit rate, and active/last tool;
 - MCP adapter status and cached direct/total tool counts per configured server;
 - `rpiv-todo` tasks from the active session branch;
@@ -22,6 +23,8 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 
 The native footer and `rpiv-todo`'s above-editor widget are hidden because their data is shown in the sidebar.
 
+The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. It resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
+
 ## Commands
 
 ```text
@@ -29,7 +32,7 @@ The native footer and `rpiv-todo`'s above-editor widget are hidden because their
 /sidebar on              Show it
 /sidebar off             Hide it
 /sidebar width 50        Set width for this process (20–80)
-/sidebar refresh         Rediscover repositories and refresh Git/MCP data
+/sidebar refresh         Refresh Codex quota, Git/MCP data, and repository discovery
 /sidebar status          Show current state, width, and repository count
 ```
 
@@ -54,7 +57,7 @@ A cached tool count is not presented as proof that a server is currently connect
 
 ## Compatibility and troubleshooting
 
-Pi currently has no public API for a non-overlapping persistent side column. This extension wraps private `tui.doRender` and `terminal.columns` fields, then restores them on reload or shutdown. A future Pi upgrade can break that contract.
+Pi currently has no public API for either a non-overlapping persistent side column or Codex account quota. This extension wraps private `tui.doRender` and `terminal.columns` fields and reads the undocumented Codex `/backend-api/wham/usage` endpoint, then restores the TUI fields on reload or shutdown. A future Pi or OpenAI change can break either contract; quota failures degrade to `unavailable`.
 
 If the sidebar disappears after an upgrade:
 

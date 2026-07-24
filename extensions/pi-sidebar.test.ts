@@ -77,6 +77,25 @@ async function main(): Promise<void> {
 	const safeStatus = __test__.cleanStatusText("\x1b[31mred\x1b[0m\x1b[2J\nnext");
 	assert.match(safeStatus, /\x1b\[31mred\x1b\[0m next/);
 	assert.doesNotMatch(safeStatus, /\x1b\[2J/);
+	const token = [
+		"header",
+		Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account-123" } })).toString("base64url"),
+		"signature",
+	].join(".");
+	assert.equal(__test__.codexAccountId(token), "account-123");
+	assert.equal(__test__.codexAccountId("not-a-jwt"), undefined);
+	assert.equal(__test__.parseCodexWeeklyRemaining({
+		rate_limit: { primary_window: { used_percent: 17, limit_window_seconds: 604800 }, secondary_window: null },
+	}), 83);
+	assert.equal(__test__.parseCodexWeeklyRemaining({
+		rate_limit: {
+			primary_window: { used_percent: 5, limit_window_seconds: 18000 },
+			secondary_window: { used_percent: 120, limit_window_seconds: 604800 },
+		},
+	}), 0);
+	assert.equal(__test__.parseCodexWeeklyRemaining({
+		rate_limit: { primary_window: { used_percent: 10, limit_window_seconds: 18000 } },
+	}), undefined);
 
 	const root = await mkdtemp(join(tmpdir(), "pi-sidebar-"));
 	try {
@@ -143,6 +162,16 @@ async function main(): Promise<void> {
 	assert.ok(lines.every((line) => visibleWidth(line) <= 42 && !line.includes("\n")));
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
+	state.ctx = { cwd: "/repo", model: { id: "gpt-5.6", provider: "openai-codex" } };
+	state.codexWeeklyRemaining = 83;
+	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);
+	assert.match(quotaLines.join("\n"), /week ████████░░ 83%/);
+	state.codexWeeklyRemaining = undefined;
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week loading…/);
+	state.codexWeeklyRemaining = null;
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week unavailable/);
+	state.ctx.model.provider = "anthropic";
+	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 42, 40).join("\n"), /week /);
 	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 40);
 	for (const title of ["Conversation", "Stats", "Todos (0/0)", "Git"]) {
 		assert.equal(spacedLines[spacedLines.indexOf(title) - 1], "");

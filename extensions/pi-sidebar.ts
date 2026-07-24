@@ -20,6 +20,8 @@ const DEFAULT_WIDTH = 42;
 const MIN_MAIN_WIDTH = 70;
 const REFRESH_TICKS = 15;
 const TODO_WIDGET_KEY = "rpiv-todos";
+const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
+const WEEKLY_QUOTA_BAR_WIDTH = 10;
 const PRUNED_DIRS = new Set([".cache", ".next", ".venv", "build", "dist", "node_modules", "target", "vendor", "venv"]);
 const GIT_REFRESH_TOOLS = new Set(["edit", "write"]);
 
@@ -94,6 +96,7 @@ type SidebarState = {
 	rootRepo?: string;
 	linkedWorktrees: string[];
 	context?: { tokens: number | null; contextWindow: number; percent: number | null };
+	codexWeeklyRemaining?: number | null;
 	messageStartedAt?: number;
 	lastResponseMs?: number;
 	liveSpeed?: number;
@@ -411,6 +414,55 @@ function sanitizePlainText(text: string): string {
 		.trim();
 }
 
+function codexAccountId(accessToken: string): string | undefined {
+	try {
+		const payload = JSON.parse(Buffer.from(accessToken.split(".")[1] ?? "", "base64url").toString("utf8")) as {
+			"https://api.openai.com/auth"?: { chatgpt_account_id?: unknown };
+		};
+		const accountId = payload["https://api.openai.com/auth"]?.chatgpt_account_id;
+		return typeof accountId === "string" && accountId ? accountId : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function parseCodexWeeklyRemaining(payload: unknown): number | undefined {
+	type Window = { used_percent?: unknown; limit_window_seconds?: unknown } | null;
+	const rateLimit = (payload as { rate_limit?: { primary_window?: Window; secondary_window?: Window } } | undefined)?.rate_limit;
+	const weekly = [rateLimit?.primary_window, rateLimit?.secondary_window]
+		.find((window) => typeof window?.limit_window_seconds === "number"
+			&& window.limit_window_seconds >= 6 * 24 * 60 * 60
+			&& window.limit_window_seconds <= 8 * 24 * 60 * 60);
+	const used = weekly?.used_percent;
+	if (typeof used !== "number" || !Number.isFinite(used)) return undefined;
+	return Math.max(0, Math.min(100, 100 - used));
+}
+
+async function fetchCodexWeeklyRemaining(ctx: ExtensionContext): Promise<number | undefined> {
+	const auth = await ctx.modelRegistry.getProviderAuth("openai-codex");
+	const accessToken = auth?.auth.apiKey;
+	const accountId = accessToken && codexAccountId(accessToken);
+	if (!accessToken || !accountId) return undefined;
+	const response = await fetch(CODEX_USAGE_URL, {
+		headers: {
+			Authorization: `Bearer ${accessToken}`,
+			"ChatGPT-Account-Id": accountId,
+			Accept: "application/json",
+			Origin: "https://chatgpt.com",
+			Referer: "https://chatgpt.com/",
+		},
+		signal: AbortSignal.timeout(10_000),
+	});
+	if (!response.ok) return undefined;
+	return parseCodexWeeklyRemaining(await response.json());
+}
+
+function weeklyQuotaBar(theme: Theme, remaining: number): string {
+	const filled = Math.round((remaining / 100) * WEEKLY_QUOTA_BAR_WIDTH);
+	const color = remaining <= 20 ? "error" : remaining <= 50 ? "warning" : "success";
+	return `${theme.fg(color, "█".repeat(filled))}${theme.fg("dim", "░".repeat(WEEKLY_QUOTA_BAR_WIDTH - filled))}`;
+}
+
 function padAnsi(text: string, width: number): string {
 	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 }
@@ -455,12 +507,21 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 	const contextLine = usage
 		? `${usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`} • ${usage.tokens === null ? "?" : formatNumber(usage.tokens)} of ${formatNumber(usage.contextWindow)}`
 		: "not available yet";
-	return section(theme, "Conversation", [
+	const items = [
 		theme.fg("text", title),
 		modelLine,
 		`${theme.fg("dim", "cwd   ")}${location}`,
 		`${theme.fg("dim", "ctx   ")}${contextLine}`,
-	], width);
+	];
+	if (model?.provider === "openai-codex") {
+		const remaining = state.codexWeeklyRemaining;
+		items.push(remaining === undefined
+			? `${theme.fg("dim", "week ")}${theme.fg("warning", "loading…")}`
+			: remaining === null
+				? `${theme.fg("dim", "week ")}${theme.fg("warning", "unavailable")}`
+				: `${theme.fg("dim", "week ")}${weeklyQuotaBar(theme, remaining)} ${theme.fg("accent", `${Math.round(remaining)}%`)}`);
+	}
+	return section(theme, "Conversation", items, width);
 }
 
 function renderStats(state: SidebarState, theme: Theme, width: number): string[] {
@@ -726,7 +787,9 @@ function sessionStartTime(ctx: ExtensionContext): number {
 
 export const __test__ = {
 	applyNumstat,
+	codexAccountId,
 	computeSessionStats,
+	parseCodexWeeklyRemaining,
 	discoverRepositories,
 	isInsideLinkedWorktree,
 	parseNumstat,
@@ -759,6 +822,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	let todoHideTimer: ReturnType<typeof setTimeout> | undefined;
 	let footerFallbackTimer: ReturnType<typeof setTimeout> | undefined;
 	let refreshPromise: Promise<void> | undefined;
+	let quotaPromise: Promise<void> | undefined;
 	let discoveryCache: { root: string; value: RepoDiscovery } | undefined;
 	let generation = 0;
 
@@ -821,9 +885,39 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		return promise;
 	};
 
+	const refreshCodexQuota = (ctx = state.ctx, force = false): Promise<void> => {
+		if (!ctx || ctx.model?.provider !== "openai-codex") {
+			state.codexWeeklyRemaining = undefined;
+			paint();
+			return Promise.resolve();
+		}
+		if (quotaPromise) {
+			const current = quotaPromise;
+			return force ? current.then(() => refreshCodexQuota(ctx)) : current;
+		}
+		const runGeneration = generation;
+		paint();
+		const promise = fetchCodexWeeklyRemaining(ctx)
+			.then((remaining) => {
+				if (runGeneration !== generation || state.ctx?.model?.provider !== "openai-codex") return;
+				state.codexWeeklyRemaining = remaining ?? null;
+			})
+			.catch(() => {
+				if (runGeneration !== generation || state.ctx?.model?.provider !== "openai-codex") return;
+				state.codexWeeklyRemaining = null;
+			});
+		quotaPromise = promise;
+		void promise.finally(() => {
+			if (quotaPromise === promise) quotaPromise = undefined;
+			if (runGeneration === generation) paint();
+		});
+		return promise;
+	};
+
 	pi.on("session_start", async (_event, ctx) => {
 		generation++;
 		refreshPromise = undefined;
+		quotaPromise = undefined;
 		discoveryCache = undefined;
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		footerFallbackTimer = undefined;
@@ -833,6 +927,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		state.liveSpeed = undefined;
 		state.lastSpeed = undefined;
 		state.lastTool = undefined;
+		state.codexWeeklyRemaining = undefined;
 		state.activeTools.clear();
 		state.speedSamples = [];
 		updateSession(ctx);
@@ -878,6 +973,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		}, 1_000);
 		tickTimer.unref?.();
 		void refreshExternal(ctx);
+		void refreshCodexQuota(ctx);
 	});
 
 	pi.on("session_info_changed", async (event, ctx) => {
@@ -897,6 +993,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	pi.on("model_select", async (_event, ctx) => {
 		state.ctx = ctx;
 		state.context = ctx.getContextUsage();
+		void refreshCodexQuota(ctx, true);
 		paint();
 	});
 	pi.on("thinking_level_select", async (event) => {
@@ -964,6 +1061,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		state.stats = computeSessionStats(ctx.sessionManager.getEntries());
 		state.context = ctx.getContextUsage();
 		void refreshExternal(ctx);
+		void refreshCodexQuota(ctx, true);
 		paint();
 	});
 
@@ -973,6 +1071,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		if (todoHideTimer) clearTimeout(todoHideTimer);
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		tickTimer = undefined;
+		quotaPromise = undefined;
 		todoHideTimer = undefined;
 		footerFallbackTimer = undefined;
 		compositor?.dispose();
@@ -997,7 +1096,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 				}
 				state.width = width;
 			} else if (action === "refresh") {
-				await refreshExternal(ctx, true);
+				await Promise.all([refreshExternal(ctx, true), refreshCodexQuota(ctx, true)]);
 				ctx.ui.notify("Sidebar refreshed.", "info");
 				return;
 			} else if (action === "status") {
