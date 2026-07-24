@@ -1,6 +1,6 @@
 ---
 description: Summarize this conversation and save to memory
-model: openai/gpt-5.6-terra
+model: openai/gpt-5.6-luna
 ---
 
 <amnesia_sum_command>
