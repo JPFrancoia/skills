@@ -116,6 +116,47 @@ async function main(): Promise<void> {
 	const safeStatus = __test__.cleanStatusText("\x1b[31mred\x1b[0m\x1b[2J\nnext");
 	assert.match(safeStatus, /\x1b\[31mred\x1b\[0m next/);
 	assert.doesNotMatch(safeStatus, /\x1b\[2J/);
+	assert.deepEqual(__test__.parseRunningAsyncSubagents([
+		"Spawn budget: unlimited",
+		"Active async runs: 2",
+		"",
+		"- run-one | running | parallel | 2 agents running | /repo",
+		"  1. scout | running | tool read for 2s",
+		"  2. reviewer | completed | 3s",
+		"",
+		"- run-two | running | chain | step 2/3 | /repo",
+		"  1. Planner | completed",
+		"  2. [Validation] Review diff (reviewer) | running | active",
+	].join("\n")), [
+		{ key: "async:run-one:1", label: "scout" },
+		{ key: "async:run-two:2", label: "[Validation] Review diff (reviewer)" },
+	]);
+	assert.deepEqual(__test__.parseRunningAsyncSubagents("Spawn budget: unlimited\nNo active async runs."), []);
+	assert.equal(__test__.parseRunningAsyncSubagents("Run: foreground\nState: running"), undefined);
+	assert.deepEqual(__test__.runningForegroundSubagents({ progress: [
+		{ agent: "scout", status: "running" },
+		{ agent: "reviewer", label: "Review", status: "running" },
+		{ agent: "planner", status: "pending" },
+	] }), [
+		{ key: "foreground:0:scout", label: "scout" },
+		{ key: "foreground:1:reviewer", label: "Review (reviewer)" },
+	]);
+	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout" }), [{ key: "foreground:0:scout", label: "scout" }]);
+	assert.deepEqual(__test__.initialForegroundSubagents({ tasks: [
+		{ agent: "scout", count: 2 },
+		{ agent: "reviewer", label: "Review" },
+	], concurrency: 2 }), [
+		{ key: "foreground:0:scout", label: "scout" },
+		{ key: "foreground:1:scout", label: "scout" },
+	]);
+	assert.deepEqual(__test__.initialForegroundSubagents({ chain: [{ parallel: [
+		{ agent: "scout" },
+		{ agent: "reviewer", label: "Review" },
+	] }] }), [
+		{ key: "foreground:0:scout", label: "scout" },
+		{ key: "foreground:1:reviewer", label: "Review (reviewer)" },
+	]);
+	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout", async: true }), []);
 	const token = [
 		"header",
 		Buffer.from(JSON.stringify({ "https://api.openai.com/auth": { chatgpt_account_id: "account-123" } })).toString("base64url"),
@@ -177,6 +218,8 @@ async function main(): Promise<void> {
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
 		activeTools: new Map(),
+		asyncSubagents: [],
+		foregroundSubagents: new Map(),
 		speedSamples: [],
 		sessionStartedAt: Date.now(),
 	};
@@ -212,6 +255,15 @@ async function main(): Promise<void> {
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.doesNotMatch(lines.join("\n"), /clean-sibling/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
+	assert.match(lines.join("\n"), /Subagents\n─+\n\(none running\)/);
+	const fullLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 100);
+	const subagentsIndex = fullLines.indexOf("Subagents");
+	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 48, subagentsIndex + 2).join("\n"), /Subagents/);
+	state.asyncSubagents = [{ key: "async:run:1", label: "scout\x1b[2J\nspoofed" }];
+	const subagentLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n");
+	assert.match(subagentLines, /Subagents\n─+\n● scout spoofed/);
+	assert.doesNotMatch(subagentLines, /\x1b\[2J/);
+	state.asyncSubagents = [];
 	state.ctx = { cwd: "/repo", model: { id: "gpt-5.6", provider: "openai-codex" } };
 	state.codexWeeklyQuota = { remaining: 83, resetAt: Date.now() + 6.5 * 86_400_000 };
 	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
@@ -240,7 +292,7 @@ async function main(): Promise<void> {
 	state.gitRepos = [{ path: "/repo", label: "repo", branch: "?", files: [], error: "git status failed" }];
 	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /git status failed/);
 	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
-	for (const title of ["Conversation", "Stats", "Todos (0/0)", "Git"]) {
+	for (const title of ["Conversation", "Stats", "Subagents", "Todos (0/0)", "Git"]) {
 		assert.equal(spacedLines[spacedLines.indexOf(title) - 1], "");
 	}
 }

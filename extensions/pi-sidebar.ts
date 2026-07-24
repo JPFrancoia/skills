@@ -23,6 +23,9 @@ const TODO_WIDGET_KEY = "rpiv-todos";
 const WORKED_WORKTREE_ENTRY = "pi-sidebar-worktree-worked";
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const WEEKLY_QUOTA_BAR_WIDTH = 10;
+const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
+const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
+const SUBAGENT_RPC_TIMEOUT_MS = 500;
 const PRUNED_DIRS = new Set([".cache", ".next", ".venv", "build", "dist", "node_modules", "target", "vendor", "venv"]);
 const GIT_REFRESH_TOOLS = new Set(["edit", "write"]);
 
@@ -90,6 +93,11 @@ type CodexWeeklyQuota = {
 	resetAt?: number;
 };
 
+type RunningSubagent = {
+	key: string;
+	label: string;
+};
+
 type SidebarState = {
 	enabled: boolean;
 	width: number;
@@ -111,6 +119,8 @@ type SidebarState = {
 	lastSpeed?: number;
 	lastTool?: string;
 	activeTools: Map<string, { name: string; startedAt: number }>;
+	asyncSubagents: RunningSubagent[];
+	foregroundSubagents: Map<string, RunningSubagent[]>;
 	speedSamples: Array<{ at: number; tokens: number }>;
 	sessionStartedAt: number;
 };
@@ -494,6 +504,73 @@ function sanitizePlainText(text: string): string {
 		.trim();
 }
 
+function parseRunningAsyncSubagents(text: string): RunningSubagent[] | undefined {
+	const lines = text.split("\n");
+	if (lines.includes("No active async runs.")) return [];
+	const heading = lines.findIndex((line) => line.startsWith("Active async runs:"));
+	if (heading < 0) return undefined;
+	const running: RunningSubagent[] = [];
+	let runId = "unknown";
+	for (const line of lines.slice(heading + 1)) {
+		const run = line.match(/^- ([^ |]+) \|/);
+		if (run) {
+			runId = run[1]!;
+			continue;
+		}
+		const step = line.match(/^\s+(\d+)\.\s+(.+?)\s+\|\s+running(?:\s+\||$)/);
+		if (!step) continue;
+		running.push({ key: `async:${runId}:${step[1]}`, label: sanitizePlainText(step[2]!) });
+	}
+	return running;
+}
+
+function runningForegroundSubagents(details: unknown): RunningSubagent[] | undefined {
+	if (!details || typeof details !== "object") return undefined;
+	const value = details as { progress?: unknown; results?: unknown };
+	let entries: Array<{ agent?: unknown; label?: unknown; status?: unknown }> | undefined;
+	if (Array.isArray(value.progress)) {
+		entries = value.progress;
+	} else if (Array.isArray(value.results)) {
+		entries = value.results.map((result) => {
+			const item = result as { agent?: unknown; label?: unknown; progress?: unknown };
+			const progress = item.progress && typeof item.progress === "object" ? item.progress as Record<string, unknown> : {};
+			return { agent: progress.agent ?? item.agent, label: progress.label ?? item.label, status: progress.status };
+		});
+	}
+	if (!entries) return undefined;
+	return entries.flatMap((entry, index) => {
+		if (entry.status !== "running" || typeof entry.agent !== "string" || !entry.agent) return [];
+		const agent = sanitizePlainText(entry.agent);
+		const label = typeof entry.label === "string" && entry.label ? `${sanitizePlainText(entry.label)} (${agent})` : agent;
+		return [{ key: `foreground:${index}:${agent}`, label }];
+	});
+}
+
+function initialForegroundSubagents(args: unknown): RunningSubagent[] {
+	if (!args || typeof args !== "object") return [];
+	const value = args as { action?: unknown; agent?: unknown; async?: unknown; tasks?: unknown; chain?: unknown; concurrency?: unknown };
+	if (value.action !== undefined || value.async === true) return [];
+	let candidates: unknown[] = [];
+	if (typeof value.agent === "string") candidates = [{ agent: value.agent }];
+	else if (Array.isArray(value.tasks)) candidates = value.tasks.flatMap((candidate) => {
+		const task = candidate as { count?: unknown };
+		const count = typeof task.count === "number" && task.count > 1 ? Math.floor(task.count) : 1;
+		return Array.from({ length: count }, () => candidate);
+	});
+	else if (Array.isArray(value.chain) && value.chain[0]) {
+		const first = value.chain[0] as { agent?: unknown; parallel?: unknown };
+		candidates = first.parallel ? (Array.isArray(first.parallel) ? first.parallel : [first.parallel]) : [first];
+	}
+	const concurrency = typeof value.concurrency === "number" && value.concurrency > 0 ? Math.floor(value.concurrency) : 4;
+	return candidates.slice(0, concurrency).flatMap((candidate, index) => {
+		const task = candidate as { agent?: unknown; label?: unknown };
+		if (typeof task.agent !== "string" || !task.agent) return [];
+		const agent = sanitizePlainText(task.agent);
+		const label = typeof task.label === "string" && task.label ? `${sanitizePlainText(task.label)} (${agent})` : agent;
+		return [{ key: `foreground:${index}:${agent}`, label }];
+	});
+}
+
 function codexAccountId(accessToken: string): string | undefined {
 	try {
 		const payload = JSON.parse(Buffer.from(accessToken.split(".")[1] ?? "", "base64url").toString("utf8")) as {
@@ -664,6 +741,16 @@ function mcpItems(state: SidebarState, theme: Theme, statuses: ReadonlyMap<strin
 	return items;
 }
 
+function subagentItems(state: SidebarState, theme: Theme): string[] {
+	const running = [
+		...[...state.foregroundSubagents.values()].flatMap((items) => items),
+		...state.asyncSubagents,
+	];
+	return running.length
+		? running.map((item) => `${theme.fg("accent", "●")} ${theme.fg("text", sanitizePlainText(item.label))}`)
+		: [theme.fg("dim", "(none running)")];
+}
+
 function todoItems(state: SidebarState, theme: Theme): { title: string; items: string[] } {
 	const visible = state.todos.filter((task) => task.status !== "deleted");
 	const completed = visible.filter((task) => task.status === "completed").length;
@@ -740,6 +827,8 @@ function renderSidebar(
 ): string[] {
 	const lines = [...renderCore(state, theme, width), ...renderStats(state, theme, width)];
 	if (lines.length >= height) return lines.slice(0, height);
+	if (height - lines.length < 4) return lines.slice(0, height);
+	lines.push(...section(theme, "Subagents", subagentItems(state, theme), width));
 
 	const todos = todoItems(state, theme);
 	const extensions = extensionItems(theme, statuses);
@@ -886,9 +975,12 @@ export const __test__ = {
 	isInsideLinkedWorktree,
 	observeWorkedWorktrees,
 	parseNumstat,
+	parseRunningAsyncSubagents,
 	parseStatus,
 	parseWorktreePaths,
 	renderSidebar,
+	runningForegroundSubagents,
+	initialForegroundSubagents,
 	serverMap,
 	cleanStatusText,
 	replayTodos,
@@ -909,6 +1001,8 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
 		activeTools: new Map(),
+		asyncSubagents: [],
+		foregroundSubagents: new Map(),
 		speedSamples: [],
 		sessionStartedAt: Date.now(),
 	};
@@ -919,9 +1013,11 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	let footerFallbackTimer: ReturnType<typeof setTimeout> | undefined;
 	let refreshPromise: Promise<void> | undefined;
 	let quotaPromise: Promise<void> | undefined;
+	let subagentStatusPromise: Promise<void> | undefined;
 	let discoveryCache: { root: string; value: RepoDiscovery } | undefined;
 	let worktreeSignatures = new Map<string, string>();
 	let generation = 0;
+	let subagentRequestSequence = 0;
 
 	const statuses = () => footerData?.getExtensionStatuses() ?? new Map<string, string>();
 	const paint = () => compositor?.paint();
@@ -935,6 +1031,47 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	};
 	const hideTodoWidget = (ctx: ExtensionContext) => {
 		try { ctx.ui.setWidget(TODO_WIDGET_KEY, undefined); } catch { /* stale replacement context */ }
+	};
+	const requestSubagentStatus = (): Promise<string | undefined> => new Promise((resolveStatus) => {
+		const requestId = `pi-sidebar-${generation}-${++subagentRequestSequence}`;
+		const replyEvent = `${SUBAGENT_RPC_REPLY_PREFIX}${requestId}`;
+		let settled = false;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let unsubscribe: (() => void) | void;
+		const finish = (text?: string) => {
+			if (settled) return;
+			settled = true;
+			if (timer) clearTimeout(timer);
+			if (typeof unsubscribe === "function") unsubscribe();
+			resolveStatus(text);
+		};
+		unsubscribe = pi.events.on(replyEvent, (raw) => {
+			const reply = raw as { success?: unknown; data?: { text?: unknown } };
+			finish(reply.success === true && typeof reply.data?.text === "string" ? reply.data.text : undefined);
+		});
+		timer = setTimeout(() => finish(), SUBAGENT_RPC_TIMEOUT_MS);
+		timer.unref?.();
+		pi.events.emit(SUBAGENT_RPC_REQUEST_EVENT, {
+			version: 1,
+			requestId,
+			method: "status",
+			source: { extension: "pi-sidebar" },
+		});
+	});
+	const refreshSubagents = (): Promise<void> => {
+		if (subagentStatusPromise) return subagentStatusPromise;
+		const runGeneration = generation;
+		const promise = requestSubagentStatus().then((text) => {
+			if (runGeneration !== generation || text === undefined) return;
+			const running = parseRunningAsyncSubagents(text);
+			if (running !== undefined) state.asyncSubagents = running;
+		});
+		subagentStatusPromise = promise;
+		void promise.finally(() => {
+			if (subagentStatusPromise === promise) subagentStatusPromise = undefined;
+			if (runGeneration === generation) paint();
+		});
+		return promise;
 	};
 
 	const refreshExternal = (ctx = state.ctx, rediscover = false): Promise<void> => {
@@ -1028,10 +1165,19 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		return promise;
 	};
 
+	const disposeAsyncStarted = pi.events.on("subagent:async-started", () => void refreshSubagents());
+	const disposeAsyncComplete = pi.events.on("subagent:async-complete", (raw) => {
+		const event = raw as { runId?: unknown; id?: unknown };
+		const runId = typeof event.runId === "string" ? event.runId : typeof event.id === "string" ? event.id : undefined;
+		if (runId) state.asyncSubagents = state.asyncSubagents.filter((item) => !item.key.startsWith(`async:${runId}:`));
+		void refreshSubagents();
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
 		generation++;
 		refreshPromise = undefined;
 		quotaPromise = undefined;
+		subagentStatusPromise = undefined;
 		discoveryCache = undefined;
 		worktreeSignatures.clear();
 		state.workedWorktrees = replayWorkedWorktrees(ctx.sessionManager.getBranch());
@@ -1045,6 +1191,8 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		state.lastTool = undefined;
 		state.codexWeeklyQuota = undefined;
 		state.activeTools.clear();
+		state.asyncSubagents = [];
+		state.foregroundSubagents.clear();
 		state.speedSamples = [];
 		updateSession(ctx);
 		if (ctx.mode !== "tui") return;
@@ -1085,11 +1233,13 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		let ticks = 0;
 		tickTimer = setInterval(() => {
 			paint();
+			void refreshSubagents();
 			if (++ticks % REFRESH_TICKS === 0) void refreshExternal();
 		}, 1_000);
 		tickTimer.unref?.();
 		void refreshExternal(ctx);
 		void refreshCodexQuota(ctx);
+		void refreshSubagents();
 	});
 
 	pi.on("session_info_changed", async (event, ctx) => {
@@ -1160,17 +1310,28 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	pi.on("tool_result", async (event, ctx) => {
 		state.ctx = ctx;
 		if (event.toolName === "todo" && isTodoDetails(event.details)) state.todos = event.details.tasks.map((task) => ({ ...task }));
+		if (event.toolName === "subagent") void refreshSubagents();
 		if (GIT_REFRESH_TOOLS.has(event.toolName)) void refreshExternal(ctx);
 		paint();
 	});
 	pi.on("tool_execution_start", async (event, ctx) => {
 		state.ctx = ctx;
 		state.activeTools.set(event.toolCallId, { name: event.toolName, startedAt: Date.now() });
+		if (event.toolName === "subagent") state.foregroundSubagents.set(event.toolCallId, initialForegroundSubagents(event.args));
 		state.lastTool = event.toolName;
+		paint();
+	});
+	pi.on("tool_execution_update", async (event) => {
+		if (event.toolName !== "subagent") return;
+		const partial = event.partialResult as { details?: unknown } | undefined;
+		const running = runningForegroundSubagents(partial?.details);
+		if (running !== undefined) state.foregroundSubagents.set(event.toolCallId, running);
 		paint();
 	});
 	pi.on("tool_execution_end", async (event) => {
 		state.activeTools.delete(event.toolCallId);
+		state.foregroundSubagents.delete(event.toolCallId);
+		if (event.toolName === "subagent") void refreshSubagents();
 		paint();
 	});
 	pi.on("agent_end", async (_event, ctx) => {
@@ -1184,11 +1345,14 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async () => {
 		generation++;
+		if (typeof disposeAsyncStarted === "function") disposeAsyncStarted();
+		if (typeof disposeAsyncComplete === "function") disposeAsyncComplete();
 		if (tickTimer) clearInterval(tickTimer);
 		if (todoHideTimer) clearTimeout(todoHideTimer);
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		tickTimer = undefined;
 		quotaPromise = undefined;
+		subagentStatusPromise = undefined;
 		todoHideTimer = undefined;
 		footerFallbackTimer = undefined;
 		compositor?.dispose();
