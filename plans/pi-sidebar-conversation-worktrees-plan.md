@@ -1,6 +1,6 @@
 # Conversation-aware sidebar worktrees
 
-Status: Implemented — awaiting merge
+Status: Completed
 Date: 2026-07-24
 
 ## 1. Brief
@@ -136,8 +136,8 @@ Live tmux-backed Pi smoke test:
 - [x] Apply conversation-aware clean-row rendering.
 - [x] Update durable sidebar documentation.
 - [x] Run focused and repository-wide checks.
-- [ ] Merge into the installed primary source.
-- [ ] Record the merged commit and mark this plan completed.
+- [x] Merge into the installed primary source.
+- [x] Record the merged commit and mark this plan completed.
 
 ## 8. Open questions / assumptions
 
@@ -162,6 +162,7 @@ Checks completed:
 - `pre-commit run --all-files` (`Detect hardcoded secrets` passed)
 - A fresh 180×40 tmux Pi smoke test with a temporary primary/sibling worktree pair verified: initial clean worktrees hidden; dirty sibling shown; cleaned sibling retained; retained sibling still shown after `/reload`; `week` immediately followed by `compactions`.
 - A second smoke test loaded a persisted session file and confirmed exactly one `pi-sidebar-worktree-worked` entry with the sibling's absolute path.
+- Merged feature commit `e04f28e` into `master`; the installed sidebar path resolves to that primary checkout.
 
 ## Grill record
 
