@@ -1,6 +1,6 @@
 # Custom Pi sidebar extension plan
 
-Status: Implemented and validated — awaiting merge/install
+Status: Completed
 Date: 2026-07-24
 
 ## 1. Brief
@@ -240,8 +240,8 @@ Installation/landing:
 - [x] Perform manual Pi/terminal/green_slope verification.
 - [x] Update this plan with completed steps, deviations, and exact validation results.
 - [x] Add approved durable docs after implementation.
-- [ ] Commit, merge through Worktrunk, install from the stable repository path, and verify activation.
-- [ ] Mark this plan `Completed` with the completion date; never delete it.
+- [x] Commit, merge through Worktrunk, install from the stable repository path, and verify activation.
+- [x] Mark this plan `Completed` with the completion date; never delete it.
 
 ## 8. Open questions / assumptions
 
@@ -277,7 +277,15 @@ Manual Pi checks completed in 180×40 tmux sessions:
 - MCP aggregate status plus `freecad 0/14`;
 - task-repository Git rows with readable filenames;
 - `green_slope` root plus dirty `tooling`, with linked worktree/container rows excluded;
-- graceful tmux/Pi shutdown for both smoke sessions.
+- graceful tmux/Pi shutdown for both smoke sessions;
+- merge to `master`, `pi install` from the stable primary-checkout path, `pi list` settings resolution, and a fresh Pi launch without `-e` showing the installed sidebar.
+
+Landing and activation:
+
+- contextual feature commit: `6b2cde9 feat(pi): add custom sidebar extension`;
+- merged to `master` through Worktrunk;
+- installed settings source: `../../informatique/ai/skills_and_commands/extensions/pi-sidebar.ts`;
+- stable resolved path: `/home/djipey/informatique/ai/skills_and_commands/extensions/pi-sidebar.ts`.
 
 Not automated: opening a real external editor. The compositor's `tui.stopped` guard and install/dispose restoration are covered by code review and the fake-TUI test.
 
