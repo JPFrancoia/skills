@@ -53,6 +53,23 @@ async function main(): Promise<void> {
 		["R", "src/new.ts", "src/old.ts"],
 		["??", "task-worktree/", undefined],
 	]);
+	const primary = join(tmpdir(), "repo");
+	const sibling = join(tmpdir(), "repo.task");
+	assert.deepEqual(__test__.parseWorktreePaths([
+		`worktree ${primary}`,
+		"HEAD abc123",
+		"branch refs/heads/main",
+		"",
+		`worktree ${sibling}`,
+		"HEAD def456",
+		"detached",
+		"locked reason",
+		"prunable gitdir file points to non-existent location",
+		"",
+		`worktree ${join(tmpdir(), "bare.git")}`,
+		"bare",
+		"",
+	].join("\0")), [primary, sibling]);
 	const deltas = __test__.parseNumstat([
 		"3\t1\tsrc/long/file.ts",
 		"-\t-\timage.png",
@@ -159,11 +176,17 @@ async function main(): Promise<void> {
 		label: "repo\x1b[2J",
 		branch: "main\nspoofed",
 		files: [{ status: "M", path: "src/evil\x1b[2J\nname.ts", added: 1, removed: 0 }],
+	}, {
+		path: "/outside/repo",
+		label: "repo",
+		branch: "clean-sibling",
+		files: [],
 	}];
 	const lines = __test__.renderSidebar(state as never, theme as never, new Map(), 42, 24);
 	assert.ok(lines.length <= 24);
 	assert.ok(lines.every((line) => visibleWidth(line) <= 42 && !line.includes("\n")));
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
+	assert.doesNotMatch(lines.join("\n"), /clean-sibling/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
 	state.ctx = { cwd: "/repo", model: { id: "gpt-5.6", provider: "openai-codex" } };
 	state.codexWeeklyQuota = { remaining: 83, resetAt: Date.now() + 6.5 * 86_400_000 };

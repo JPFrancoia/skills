@@ -19,7 +19,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 - MCP adapter status and cached direct/total tool counts per configured server;
 - `rpiv-todo` tasks from the active session branch;
 - footer indicators from other extensions, including Ponytail;
-- Git changes in the root repository and dirty independent repositories below it.
+- Git changes in the current checkout, dirty linked worktrees from the same repository, and dirty independent repositories below it.
 
 The native footer and `rpiv-todo`'s above-editor widget are hidden because their data is shown in the sidebar.
 
@@ -40,11 +40,13 @@ The default width is 42 columns. The sidebar automatically hides when showing it
 
 ## Git discovery
 
-The repository containing Pi's cwd is the root. Below it, directories containing their own `.git` directory are independent repositories and are included. Linked worktrees use a `.git` file; they and their untracked container rows are intentionally excluded.
+The checkout containing Pi's cwd is always shown. Git's native worktree list supplies dirty sibling worktrees from the same repository, including worktrees outside the current directory tree. Clean sibling worktrees are omitted.
 
-The root is always shown. Clean nested repositories are omitted. Files are grouped under their repository and long paths are shortened from the left so the filename remains readable. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
+Below the current checkout, directories containing their own `.git` directory are independent repositories and are included when dirty. Linked-worktree container rows are filtered from the containing checkout's status instead of appearing as untracked directories.
 
-Git/MCP state refreshes every 15 seconds and after relevant Pi events. `/sidebar refresh` forces repository rediscovery.
+Files are grouped under their checkout or repository, and long paths are shortened from the left so the filename remains readable. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
+
+Git worktree membership and Git/MCP state refresh every 15 seconds and after relevant Pi events. `/sidebar refresh` also forces independent-repository rediscovery.
 
 ## MCP status
 

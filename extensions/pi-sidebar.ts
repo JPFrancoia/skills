@@ -272,6 +272,28 @@ function isInsideLinkedWorktree(path: string, worktrees: readonly string[]): boo
 	return worktrees.some((worktree) => normalized === worktree || normalized.startsWith(`${worktree}/`));
 }
 
+function parseWorktreePaths(output: string): string[] {
+	const paths: string[] = [];
+	let path: string | undefined;
+	let bare = false;
+	const flush = () => {
+		if (path && !bare) paths.push(resolve(path));
+		path = undefined;
+		bare = false;
+	};
+
+	for (const token of output.split("\0")) {
+		if (!token) {
+			flush();
+			continue;
+		}
+		if (token.startsWith("worktree ")) path = token.slice("worktree ".length);
+		else if (token === "bare") bare = true;
+	}
+	flush();
+	return paths;
+}
+
 async function kind(path: string): Promise<"directory" | "file" | undefined> {
 	try {
 		const value = await stat(path);
@@ -617,7 +639,7 @@ function gitItems(state: SidebarState, theme: Theme, width: number): string[] {
 	if (state.gitRepos.length === 0) return [theme.fg("dim", "(refreshing…)")];
 	const items: string[] = [];
 	for (const repo of state.gitRepos) {
-		if (repo.label !== basename(state.rootRepo) && repo.files.length === 0 && !repo.error) continue;
+		if (repo.path !== state.rootRepo && repo.files.length === 0 && !repo.error) continue;
 		if (items.length > 0) items.push("");
 		const safeBranch = sanitizePlainText(repo.branch);
 		const safeLabel = sanitizePlainText(repo.label);
@@ -810,6 +832,7 @@ export const __test__ = {
 	isInsideLinkedWorktree,
 	parseNumstat,
 	parseStatus,
+	parseWorktreePaths,
 	renderSidebar,
 	serverMap,
 	cleanStatusText,
@@ -878,10 +901,20 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 				: await discoverRepositories(root);
 			if (runGeneration !== generation) return;
 			discoveryCache = { root, value: discovery };
-			const gitRepos = await Promise.all([root, ...discovery.repos].map((path) => refreshOneRepo(pi, root, path, discovery.linkedWorktrees)));
+			const worktreeResult = await pi.exec("git", ["worktree", "list", "--porcelain", "-z"], { cwd: root, timeout: 2_000 });
+			if (runGeneration !== generation) return;
+			const worktrees = worktreeResult.code === 0 ? parseWorktreePaths(worktreeResult.stdout) : [];
+			const linkedWorktrees = [...new Set([
+				...discovery.linkedWorktrees,
+				...worktrees
+					.filter((path) => path !== root && path.startsWith(`${root}${sep}`))
+					.map((path) => normalizeRelativePath(relative(root, path))),
+			])];
+			const paths = [...new Set([root, ...worktrees, ...discovery.repos])];
+			const gitRepos = await Promise.all(paths.map((path) => refreshOneRepo(pi, root, path, linkedWorktrees)));
 			if (runGeneration !== generation) return;
 			state.rootRepo = root;
-			state.linkedWorktrees = discovery.linkedWorktrees;
+			state.linkedWorktrees = linkedWorktrees;
 			state.gitRepos = gitRepos;
 		})().catch((error) => {
 			if (runGeneration !== generation) return;
