@@ -1,7 +1,8 @@
 # Worktree-aware Pi sidebar Git section
 
-Status: Completed
+Status: Completed initial scope; nested-repository follow-up ready
 Date: 2026-07-24
+Follow-up added: 2026-07-25
 
 ## 1. Brief
 
@@ -142,6 +143,96 @@ Checks completed:
 Review note:
 
 - A fresh subagent review could not start because the installed `pi-mcp-adapter` currently cannot resolve `@modelcontextprotocol/sdk/types.js`; automated extension, repository, and live TUI checks passed.
+
+## Follow-up: worktrees owned by nested repositories
+
+### Reported gap
+
+A GreenSlope workspace session exposed the boundary deliberately left out of the initial implementation. Pi ran from `/home/djipey/projects/green_slope`, while Enterprise and Infra were independent repositories nested below that workspace root. Their dirty task worktrees lived outside the workspace tree:
+
+```text
+/home/djipey/projects/green_slope-enterprise-partition-provisioner
+/home/djipey/projects/green_slope-infra-partition-job
+```
+
+The sidebar showed only dirty files from the workspace-root repository. It did not show either task worktree, even though `git -C enterprise worktree list` and `git -C infra worktree list` reported them correctly.
+
+### Root cause
+
+`refreshExternal()` resolves the repository containing Pi's cwd and runs `git worktree list --porcelain -z` only for that repository. `discoverRepositories()` finds Enterprise and Infra as independent nested repositories, but the refresh loop adds only their current checkout paths; it never asks those repositories for their linked worktree sets. An outside-tree worktree therefore cannot be found by filesystem discovery, and its clean nested primary checkout is hidden by the normal rendering rule.
+
+This means `/sidebar refresh` cannot repair the display: rediscovery repeats the same intentionally narrow repository scope.
+
+### Follow-up behavior
+
+Expand worktree enumeration from the cwd repository to every independent repository discovered below it:
+
+1. Keep the workspace/cwd repository as the first repository group.
+2. Treat each path in `discovery.repos` as another repository group.
+3. Run `git worktree list --porcelain -z` once per group on every Git refresh.
+4. Fall back to that group's discovered checkout when its worktree command fails or returns no usable path.
+5. Deduplicate all absolute checkout paths before calling the existing `refreshOneRepo()` status/numstat path.
+6. Include every group's worktree paths in conversation-aware status-signature observation, so a nested repository worktree remains visible after becoming clean if this conversation observed it change.
+7. Continue hiding untouched clean worktrees and independent repositories.
+
+Do not infer outside-tree paths from directory names, Worktrunk conventions, session text, or tool calls. Git remains the authoritative source.
+
+### Ownership-aware filtering
+
+Keep linked-worktree container filtering scoped to the repository that owns each worktree list. The current single `linkedWorktrees` list and `path === root` condition are sufficient only for the cwd repository. The follow-up should retain enough group ownership to prevent an in-tree linked worktree from appearing as an untracked directory in its owning primary checkout without filtering unrelated repositories' files.
+
+Use the smallest representation that preserves that association, for example a local array of `{ root, worktrees }` groups during refresh. Do not add persistent repository configuration or a general workspace model.
+
+### Rendering and labels
+
+Reuse current rendering and path truncation. Dirty external worktrees should appear under their own branch and file rows; no new visual section or badge is required. Labels may remain relative to the workspace root and use the existing left-truncation behavior.
+
+### File impact
+
+- `extensions/pi-sidebar.ts` — enumerate worktrees for the cwd repository and every discovered nested repository, preserve owner-specific linked-container filtering, deduplicate refresh paths, and observe all worktree sets for conversation memory.
+- `extensions/pi-sidebar.test.ts` — cover a workspace root containing an independent nested repository whose dirty linked worktree is an outside-tree sibling; cover per-group enumeration failure and deduplication.
+- `docs/pi-sidebar.md` — state that dirty worktrees from discovered nested repositories are included, not only worktrees from the repository containing Pi's cwd.
+- `plans/pi-sidebar-git-worktrees-plan.md` — retain this follow-up and record implementation/validation results.
+
+### Risks and edge cases
+
+- One `git worktree list` call is added per discovered repository every 15-second Git refresh. Run these calls concurrently and keep the existing short timeout.
+- A nested repository may disappear between cached filesystem discovery and refresh. Preserve its per-repository error behavior or fallback checkout without failing other groups.
+- The same path can be encountered through discovery and a worktree list. Resolve and deduplicate absolute paths before status calls.
+- Do not let one group's worktree-list failure remove successfully enumerated groups.
+- Clean nested repositories will now participate in conversation-aware worktree memory. They should remain hidden until dirty or observed changing, matching the current worktree rule.
+
+### Validation
+
+Automated:
+
+- extend `extensions/pi-sidebar.test.ts` with focused nested-repository worktree inventory assertions;
+- run `~/.pi/agent/npm/node_modules/.bin/jiti extensions/pi-sidebar.test.ts`;
+- run `git diff --check`;
+- run `pre-commit run --all-files`.
+
+Manual proof in the GreenSlope workspace:
+
+1. Keep the workspace root dirty.
+2. Keep `enterprise/` and `infra/` primary checkouts clean.
+3. Make their outside-tree task worktrees dirty.
+4. Run `/reload`, then `/sidebar refresh`.
+5. Verify the Git section shows the workspace root plus both dirty task worktrees with the correct branches and files.
+6. Verify unrelated untouched clean worktrees remain hidden.
+
+### Follow-up checklist
+
+- [ ] Add per-discovered-repository worktree enumeration.
+- [ ] Preserve repository ownership for linked-container filtering.
+- [ ] Deduplicate absolute paths before status refresh.
+- [ ] Observe nested repository worktree signatures for conversation memory.
+- [ ] Add focused nested-repository/outside-tree tests.
+- [ ] Update `docs/pi-sidebar.md`.
+- [ ] Run focused and repository hygiene checks.
+- [ ] Perform the GreenSlope live sidebar proof.
+- [ ] Record the implementation commit and final validation here.
+
+This follow-up supersedes only the earlier decision to leave nested repositories' worktree sets out of scope. All other original rendering, persistence, and refresh decisions remain in force.
 
 ## Grill record
 
