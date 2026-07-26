@@ -72,11 +72,79 @@ function harness(
 async function main(): Promise<void> {
 	assert.equal(__test__.repoArgument(""), ".");
 	assert.equal(__test__.repoArgument("'nested repo'"), "nested repo");
+	assert.deepEqual(__test__.parseWorktrees([
+		"worktree /work/main",
+		"HEAD abc123",
+		"branch refs/heads/main",
+		"",
+		"worktree /work/task checkout ",
+		"HEAD def456",
+		"branch refs/heads/feat/task",
+		"",
+		"worktree /work/bare.git",
+		"bare",
+		"",
+	].join("\0")), [
+		{ path: "/work/main", branch: "main" },
+		{ path: "/work/task checkout ", branch: "feat/task" },
+	]);
 
-	const invalid = harness([{ code: 128, stdout: "", stderr: "not a repository" }]);
+	const invalid = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 128, stdout: "", stderr: "not a repository" },
+	]);
 	await invalid.handler("missing", invalid.ctx);
 	assert.equal(invalid.emitted(), undefined);
 	assert.match(invalid.notifications[0] ?? "", /not a Git repository/);
+
+	const worktreeList = [
+		"worktree /work",
+		"HEAD abc123",
+		"branch refs/heads/main",
+		"",
+		"worktree /sibling/task-worktree",
+		"HEAD def456",
+		"branch refs/heads/feat/task-worktree",
+		"",
+	].join("\0");
+	const basenameTarget = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 0, stdout: worktreeList, stderr: "" },
+		{ code: 0, stdout: "/sibling/task-worktree\n", stderr: "" },
+		{ code: 1, stdout: "", stderr: "" },
+	]);
+	await basenameTarget.handler("task-worktree", basenameTarget.ctx);
+	assert.equal((basenameTarget.emitted() as { params: { cwd: string } }).params.cwd, "/sibling/task-worktree");
+	assert.deepEqual(basenameTarget.calls, [
+		{ command: "git", args: ["-C", "/work/task-worktree", "rev-parse", "--show-toplevel"] },
+		{ command: "git", args: ["-C", "/work", "worktree", "list", "--porcelain", "-z"] },
+		{ command: "git", args: ["-C", "/sibling/task-worktree", "rev-parse", "--show-toplevel"] },
+		{ command: "git", args: ["-C", "/sibling/task-worktree", "diff", "--cached", "--quiet", "--exit-code"] },
+	]);
+
+	const branchTarget = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 0, stdout: worktreeList, stderr: "" },
+		{ code: 0, stdout: "/sibling/task-worktree\n", stderr: "" },
+		{ code: 1, stdout: "", stderr: "" },
+	]);
+	await branchTarget.handler("feat/task-worktree", branchTarget.ctx);
+	assert.equal((branchTarget.emitted() as { params: { cwd: string } }).params.cwd, "/sibling/task-worktree");
+
+	const ambiguous = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 0, stdout: [
+			"worktree /one/task",
+			"branch refs/heads/feat/one",
+			"",
+			"worktree /two/other",
+			"branch refs/heads/task",
+			"",
+		].join("\0"), stderr: "" },
+	]);
+	await ambiguous.handler("task", ambiguous.ctx);
+	assert.equal(ambiguous.emitted(), undefined);
+	assert.match(ambiguous.notifications[0] ?? "", /Ambiguous worktree task: \/one\/task, \/two\/other/);
 
 	const clean = harness([
 		{ code: 0, stdout: "/work/repo\n", stderr: "" },
