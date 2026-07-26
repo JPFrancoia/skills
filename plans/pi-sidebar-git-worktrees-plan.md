@@ -250,7 +250,7 @@ Checks completed:
 
 A fresh 180×45 tmux-backed Pi session loaded the task-worktree extension from source in `/home/djipey/projects/green_slope`. The Git section showed the dirty workspace checkout and the dirty nested Infra worktree at `../green_slope-infra-partition-job`, including its branch and changed Terraform files. The clean Enterprise primary checkout and clean outside-tree Enterprise task worktree remained hidden, proving both nested outside-tree discovery and untouched-clean suppression without modifying the GreenSlope repositories.
 
-A fresh reviewer found no fixes needed and confirmed the per-owner enumeration, deduplication, linked-container filtering, conversation memory, clean rendering, tests, and docs. An earlier scout review identified the stale clean-current-checkout behavior; the implementation restored the approved path-based rule and the focused test covers it. No implementation commit was created because the user did not request one.
+A fresh reviewer found no fixes needed and confirmed the per-owner enumeration, deduplication, linked-container filtering, conversation memory, clean rendering, tests, and docs. An earlier scout review identified the stale clean-current-checkout behavior; the implementation restored the approved path-based rule and the focused test covers it. Implementation commit `03846f5` was merged into `master`.
 
 This follow-up supersedes only the earlier decision to leave nested repositories' worktree sets out of scope. All other original rendering, persistence, and refresh decisions remain in force.
 

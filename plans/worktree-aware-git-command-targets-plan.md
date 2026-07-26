@@ -1,6 +1,6 @@
 # Worktree-aware `/m` and `/pr` repository targets
 
-Status: Completed on 2026-07-26; activation pending merge
+Status: Completed and activated on 2026-07-26
 Date: 2026-07-25
 
 ## 1. Brief
@@ -76,7 +76,7 @@ Completed manual proof:
 - Non-mutating print-mode `/m` proof resolved a worktree directory-basename selector.
 - Non-mutating print-mode `/pr` proof resolved a full short-branch selector.
 
-A first reviewer found the implementation correct and suggested making direct-path precedence and cwd-repository fallback explicit in both test files; those call-order assertions were added. A final fresh reviewer found no fixes needed. Activation/reload against the global extension symlinks remains pending until the implementation branch is merged into the canonical checkout.
+A first reviewer found the implementation correct and suggested making direct-path precedence and cwd-repository fallback explicit in both test files; those call-order assertions were added. A final fresh reviewer found no fixes needed. Implementation commit `8b84e68` was merged into `master`; the canonical checkout now serves that source through the existing global extension symlinks. Fresh Pi print-mode proofs passed for `/m` by worktree basename and `/pr` by branch selector.
 
 ## 7. Step-by-step execution checklist
 
@@ -90,7 +90,7 @@ A first reviewer found the implementation correct and suggested making direct-pa
 - [x] Run repository hygiene checks.
 - [x] Record non-mutating print-mode basename `/m` and branch `/pr` proof.
 - [x] Obtain a fresh reviewer pass and apply required fixes.
-- [ ] Activate/reload the final merged extension source and record the result.
+- [x] Activate/reload the final merged extension source and record the result.
 
 ## 8. Open questions / assumptions
 
