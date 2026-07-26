@@ -87,6 +87,12 @@ type RepoDiscovery = {
 	linkedWorktrees: string[];
 };
 
+type WorktreeTarget = {
+	owner: string;
+	path: string;
+	linkedWorktrees: string[];
+};
+
 type FooterData = {
 	getExtensionStatuses(): ReadonlyMap<string, string>;
 };
@@ -378,6 +384,35 @@ function parseWorktreePaths(output: string): string[] {
 	}
 	flush();
 	return paths;
+}
+
+async function enumerateWorktreeTargets(
+	roots: readonly string[],
+	rootLinkedWorktrees: readonly string[],
+	listWorktrees: (root: string) => Promise<readonly string[]>,
+): Promise<WorktreeTarget[]> {
+	const groups = await Promise.all([...new Set(roots.map((root) => resolve(root)))].map(async (owner, index) => {
+		let listed: readonly string[] = [];
+		try {
+			listed = await listWorktrees(owner);
+		} catch {
+			// A failed group still refreshes its discovered checkout.
+		}
+		const worktrees = [...new Set([owner, ...listed.map((path) => resolve(path))])];
+		const linkedWorktrees = [...new Set([
+			...(index === 0 ? rootLinkedWorktrees.map(normalizeRelativePath) : []),
+			...worktrees
+				.filter((path) => path !== owner && path.startsWith(`${owner}${sep}`))
+				.map((path) => normalizeRelativePath(relative(owner, path))),
+		])];
+		return worktrees.map((path) => ({ owner, path, linkedWorktrees }));
+	}));
+	const seen = new Set<string>();
+	return groups.flat().filter(({ path }) => {
+		if (seen.has(path)) return false;
+		seen.add(path);
+		return true;
+	});
 }
 
 function worktreeSignature(repo: GitRepo): string | undefined {
@@ -898,7 +933,7 @@ function gitItems(state: SidebarState, theme: Theme, width: number): string[] {
 	if (state.gitRepos.length === 0) return [theme.fg("dim", "(refreshing…)")];
 	const items: string[] = [];
 	for (const repo of state.gitRepos) {
-		if (repo.files.length === 0 && !repo.error && !state.workedWorktrees.has(repo.path)) continue;
+		if (repo.files.length === 0 && !repo.error && repo.path !== state.rootRepo && !state.workedWorktrees.has(repo.path)) continue;
 		if (items.length > 0) items.push("");
 		const safeBranch = sanitizePlainText(repo.branch);
 		const safeLabel = sanitizePlainText(repo.label);
@@ -1060,15 +1095,21 @@ class SidebarCompositor {
 	}
 }
 
-async function refreshOneRepo(pi: ExtensionAPI, root: string, path: string, linkedWorktrees: readonly string[]): Promise<GitRepo> {
-	const label = path === root ? basename(root) : normalizeRelativePath(relative(root, path));
+async function refreshOneRepo(
+	pi: ExtensionAPI,
+	displayRoot: string,
+	owner: string,
+	path: string,
+	linkedWorktrees: readonly string[],
+): Promise<GitRepo> {
+	const label = path === displayRoot ? basename(displayRoot) : normalizeRelativePath(relative(displayRoot, path));
 	const status = await pi.exec("git", ["status", "--porcelain=v1", "-z", "--branch", "--untracked-files=all"], {
 		cwd: path,
 		timeout: 3_000,
 	});
 	if (status.code !== 0) return { path, label, branch: "?", files: [], error: status.stderr.trim() || "git status failed" };
 	const parsed = parseStatus(status.stdout);
-	let files = path === root ? parsed.files.filter((file) => !isInsideLinkedWorktree(file.path, linkedWorktrees)) : parsed.files;
+	let files = path === owner ? parsed.files.filter((file) => !isInsideLinkedWorktree(file.path, linkedWorktrees)) : parsed.files;
 	if (files.some((file) => !file.untracked)) {
 		const numstat = await pi.exec("git", ["diff", "--numstat", "-z", "HEAD", "--"], { cwd: path, timeout: 3_000 });
 		if (numstat.code === 0) files = applyNumstat(files, parseNumstat(numstat.stdout));
@@ -1099,6 +1140,7 @@ export const __test__ = {
 	parseRunningAsyncSubagents,
 	parseStatus,
 	parseWorktreePaths,
+	enumerateWorktreeTargets,
 	renderSidebar,
 	runningForegroundSubagents,
 	initialForegroundSubagents,
@@ -1276,19 +1318,19 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 				: await discoverRepositories(root);
 			if (runGeneration !== generation) return;
 			discoveryCache = { root, value: discovery };
-			const worktreeResult = await pi.exec("git", ["worktree", "list", "--porcelain", "-z"], { cwd: root, timeout: 2_000 });
+			const targets = await enumerateWorktreeTargets(
+				[root, ...discovery.repos],
+				discovery.linkedWorktrees,
+				async (owner) => {
+					const result = await pi.exec("git", ["worktree", "list", "--porcelain", "-z"], { cwd: owner, timeout: 2_000 });
+					return result.code === 0 ? parseWorktreePaths(result.stdout) : [];
+				},
+			);
 			if (runGeneration !== generation) return;
-			const worktrees = worktreeResult.code === 0 ? parseWorktreePaths(worktreeResult.stdout) : [];
-			const linkedWorktrees = [...new Set([
-				...discovery.linkedWorktrees,
-				...worktrees
-					.filter((path) => path !== root && path.startsWith(`${root}${sep}`))
-					.map((path) => normalizeRelativePath(relative(root, path))),
-			])];
-			const worktreePaths = [...new Set([root, ...worktrees])];
-			const paths = [...new Set([...worktreePaths, ...discovery.repos])];
-			const gitRepos = await Promise.all(paths.map((path) => refreshOneRepo(pi, root, path, linkedWorktrees)));
+			const gitRepos = await Promise.all(targets.map(({ owner, path, linkedWorktrees }) =>
+				refreshOneRepo(pi, root, owner, path, linkedWorktrees)));
 			if (runGeneration !== generation) return;
+			const worktreePaths = targets.map(({ path }) => path);
 			const observation = observeWorkedWorktrees(gitRepos, worktreePaths, worktreeSignatures, state.workedWorktrees);
 			worktreeSignatures = observation.signatures;
 			for (const path of observation.newlyWorked) {
@@ -1296,7 +1338,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 				pi.appendEntry(WORKED_WORKTREE_ENTRY, { path });
 			}
 			state.rootRepo = root;
-			state.linkedWorktrees = linkedWorktrees;
+			state.linkedWorktrees = targets.find(({ owner }) => owner === root)?.linkedWorktrees ?? [];
 			state.gitRepos = gitRepos;
 		})().catch((error) => {
 			if (runGeneration !== generation) return;

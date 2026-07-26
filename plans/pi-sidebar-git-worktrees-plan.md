@@ -1,6 +1,6 @@
 # Worktree-aware Pi sidebar Git section
 
-Status: Completed initial scope; nested-repository follow-up ready
+Status: Completed on 2026-07-25
 Date: 2026-07-24
 Follow-up added: 2026-07-25
 
@@ -222,15 +222,35 @@ Manual proof in the GreenSlope workspace:
 
 ### Follow-up checklist
 
-- [ ] Add per-discovered-repository worktree enumeration.
-- [ ] Preserve repository ownership for linked-container filtering.
-- [ ] Deduplicate absolute paths before status refresh.
-- [ ] Observe nested repository worktree signatures for conversation memory.
-- [ ] Add focused nested-repository/outside-tree tests.
-- [ ] Update `docs/pi-sidebar.md`.
-- [ ] Run focused and repository hygiene checks.
-- [ ] Perform the GreenSlope live sidebar proof.
-- [ ] Record the implementation commit and final validation here.
+- [x] Add per-discovered-repository worktree enumeration.
+- [x] Preserve repository ownership for linked-container filtering.
+- [x] Deduplicate absolute paths before status refresh.
+- [x] Observe nested repository worktree signatures for conversation memory.
+- [x] Add focused nested-repository/outside-tree tests.
+- [x] Update `docs/pi-sidebar.md`.
+- [x] Run focused and repository hygiene checks.
+- [x] Perform the GreenSlope live sidebar proof.
+- [x] Record final validation here.
+
+### Follow-up implementation notes
+
+- Each refresh enumerates Git worktrees for the cwd repository and every discovered independent nested repository, then refreshes each deduplicated checkout.
+- Enumeration retains each checkout's owning repository so linked-worktree container paths are filtered only from that owner's status.
+- All enumerated paths participate in conversation-aware worktree observation; the clean cwd checkout stays visible, while untouched clean sibling and nested worktrees remain hidden.
+- `refreshOneRepo()` now receives separate display and owner roots, preserving workspace-relative labels while filtering linked containers only from their owning primary checkout.
+- Current-checkout rendering was restored to the original approved rule: it remains visible when clean; path identity, not a coincidental label, controls that exception.
+
+### Follow-up validation results
+
+Checks completed:
+
+- `~/.pi/agent/npm/node_modules/.bin/jiti extensions/pi-sidebar.test.ts`
+- `git diff --check`
+- `pre-commit run --all-files` (`Detect hardcoded secrets` passed)
+
+A fresh 180×45 tmux-backed Pi session loaded the task-worktree extension from source in `/home/djipey/projects/green_slope`. The Git section showed the dirty workspace checkout and the dirty nested Infra worktree at `../green_slope-infra-partition-job`, including its branch and changed Terraform files. The clean Enterprise primary checkout and clean outside-tree Enterprise task worktree remained hidden, proving both nested outside-tree discovery and untouched-clean suppression without modifying the GreenSlope repositories.
+
+A fresh reviewer found no fixes needed and confirmed the per-owner enumeration, deduplication, linked-container filtering, conversation memory, clean rendering, tests, and docs. An earlier scout review identified the stale clean-current-checkout behavior; the implementation restored the approved path-based rule and the focused test covers it. No implementation commit was created because the user did not request one.
 
 This follow-up supersedes only the earlier decision to leave nested repositories' worktree sets out of scope. All other original rendering, persistence, and refresh decisions remain in force.
 
