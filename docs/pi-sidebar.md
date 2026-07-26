@@ -20,7 +20,7 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 - MCP adapter status and cached direct/total tool counts per configured server;
 - `rpiv-todo` tasks from the active session branch;
 - footer indicators from other extensions, including Ponytail;
-- Git changes in the current checkout, dirty linked worktrees from the same repository, and dirty independent repositories below it.
+- Git changes in the current checkout, dirty worktrees from that repository and discovered independent nested repositories, and dirty independent repositories below it.
 
 The native footer and `rpiv-todo`'s above-editor widget are hidden because their data is shown in the sidebar.
 
@@ -47,11 +47,11 @@ The default width is 53 columns. The sidebar automatically hides when showing it
 
 ## Git discovery
 
-Git's native worktree list supplies the checkout containing Pi's cwd and sibling worktrees from the same repository, including paths outside the current directory tree. Dirty worktrees are always shown. A clean worktree is hidden unless its Git status changed while the current Pi conversation was open; after that, it remains visible as clean for the rest of that conversation. This memory is stored in the Pi session, survives `/reload`, and follows the active `/tree` branch. A clean worktree that was merely present at startup or opened by another process remains hidden.
+Git's native worktree list is refreshed for the checkout containing Pi's cwd and for every discovered independent repository below it. This includes sibling and nested-repository worktrees outside the current directory tree. Dirty worktrees are always shown. The checkout containing Pi's cwd remains visible when clean; other clean worktrees are hidden unless their Git status changed while the current Pi conversation was open, after which they remain visible as clean for that conversation. This memory is stored in the Pi session, survives `/reload`, and follows the active `/tree` branch. A clean worktree that was merely present at startup or opened by another process remains hidden.
 
-Below the current checkout, directories containing their own `.git` directory are independent repositories and are included only when dirty. They are not retained after becoming clean. Linked-worktree container rows are filtered from the containing checkout's status instead of appearing as untracked directories.
+Below the current checkout, directories containing their own `.git` directory become independent repository groups. Their primary checkouts and linked worktrees follow the same dirty and conversation-memory rules. Linked-worktree container rows are filtered from the status of the repository that owns them instead of appearing as untracked directories.
 
-Files are grouped under their checkout or repository, and long paths are shortened from the left so the filename remains readable. If no worktree or nested repository qualifies, the Git section shows one compact `clean` row. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
+Files are grouped under their checkout or repository, and long paths are shortened from the left so the filename remains readable. If the current checkout is clean and no other worktree or nested repository qualifies, the Git section shows its header and one compact `clean` row. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
 
 Git worktree membership and Git/MCP state refresh every 15 seconds and after relevant Pi events. `/sidebar refresh` also forces independent-repository rediscovery.
 

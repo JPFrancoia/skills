@@ -71,6 +71,39 @@ async function main(): Promise<void> {
 		"bare",
 		"",
 	].join("\0")), [primary, sibling]);
+	const workspaceRoot = join(tmpdir(), "workspace");
+	const nestedRoot = join(workspaceRoot, "enterprise");
+	const workspaceTask = join(tmpdir(), "workspace-task");
+	const nestedTask = join(tmpdir(), "workspace-enterprise-task");
+	const nestedInlineTask = join(nestedRoot, "task");
+	const duplicate = join(tmpdir(), "duplicate-worktree");
+	const targets = await __test__.enumerateWorktreeTargets(
+		[workspaceRoot, nestedRoot, nestedRoot],
+		["linked-root"],
+		async (owner) => owner === workspaceRoot
+			? [workspaceRoot, workspaceTask, duplicate]
+			: [nestedRoot, nestedTask, nestedInlineTask, duplicate],
+	);
+	assert.deepEqual(targets.map(({ owner, path, linkedWorktrees }) => [owner, path, linkedWorktrees]), [
+		[workspaceRoot, workspaceRoot, ["linked-root"]],
+		[workspaceRoot, workspaceTask, ["linked-root"]],
+		[workspaceRoot, duplicate, ["linked-root"]],
+		[nestedRoot, nestedRoot, ["task"]],
+		[nestedRoot, nestedTask, ["task"]],
+		[nestedRoot, nestedInlineTask, ["task"]],
+	]);
+	const failedTargets = await __test__.enumerateWorktreeTargets(
+		[workspaceRoot, nestedRoot],
+		[],
+		async (owner) => {
+			if (owner === nestedRoot) throw new Error("missing nested repository");
+			return [];
+		},
+	);
+	assert.deepEqual(failedTargets.map(({ owner, path }) => [owner, path]), [
+		[workspaceRoot, workspaceRoot],
+		[nestedRoot, nestedRoot],
+	]);
 	assert.deepEqual([...__test__.replayWorkedWorktrees([
 		{ type: "custom", customType: "other", data: { path: sibling } },
 		{ type: "custom", customType: "pi-sidebar-worktree-worked", data: { path: primary } },
@@ -85,6 +118,13 @@ async function main(): Promise<void> {
 	assert.deepEqual(cleanToDirty.newlyWorked, [primary]);
 	const dirtyBaseline = __test__.observeWorkedWorktrees([dirtyRepo], [primary], new Map(), new Set());
 	assert.deepEqual(dirtyBaseline.newlyWorked, []);
+	const nestedCleanRepo = { ...cleanRepo, path: nestedTask, label: "workspace-enterprise-task", branch: "task" };
+	const nestedBaseline = __test__.observeWorkedWorktrees([cleanRepo, nestedCleanRepo], [primary, nestedTask], new Map(), new Set());
+	const nestedDirtyRepo = { ...nestedCleanRepo, files: [{ status: "M", path: "nested.ts", added: 1, removed: 0 }] };
+	assert.deepEqual(
+		__test__.observeWorkedWorktrees([cleanRepo, nestedDirtyRepo], [primary, nestedTask], nestedBaseline.signatures, new Set()).newlyWorked,
+		[nestedTask],
+	);
 	const failedObservation = __test__.observeWorkedWorktrees([{ ...cleanRepo, error: "git failed" }], [primary], dirtyBaseline.signatures, new Set());
 	assert.deepEqual(failedObservation.newlyWorked, []);
 	assert.equal(failedObservation.signatures.get(primary), dirtyBaseline.signatures.get(primary));
@@ -344,7 +384,8 @@ async function main(): Promise<void> {
 		files: [],
 	}];
 	const untouchedCleanLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n");
-	assert.doesNotMatch(untouchedCleanLines, /repo • main|clean-sibling/);
+	assert.match(untouchedCleanLines, /repo\n• main\nclean/);
+	assert.doesNotMatch(untouchedCleanLines, /clean-sibling/);
 	state.workedWorktrees.add("/outside/repo");
 	const rememberedCleanLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n");
 	assert.match(rememberedCleanLines, /clean-sibling/);
