@@ -1,7 +1,7 @@
 /**
  * pi-sidebar — fixed right sidebar for this Pi setup.
  *
- * Shows session/model/context/stats, MCP, rpiv-todo, extension statuses, and
+ * Shows session/model/context/stats, rpiv-todo, extension statuses, and
  * root+nested-repository Git changes. Install with:
  *   pi install /absolute/path/to/extensions/pi-sidebar.ts
  *
@@ -28,7 +28,7 @@ const WEEKLY_QUOTA_BAR_WIDTH = 10;
 const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
 const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
 const SUBAGENT_RPC_TIMEOUT_MS = 500;
-const SUBAGENT_LIFECYCLE_VERSION = 2;
+const SUBAGENT_LIFECYCLE_VERSIONS = new Set([2, 3]);
 const PRUNED_DIRS = new Set([".cache", ".next", ".venv", "build", "dist", "node_modules", "target", "vendor", "venv"]);
 const GIT_REFRESH_TOOLS = new Set(["edit", "write"]);
 
@@ -56,12 +56,6 @@ type TodoTask = {
 	subject: string;
 	activeForm?: string;
 	status: "pending" | "in_progress" | "completed" | "deleted";
-};
-
-type McpServer = {
-	name: string;
-	direct: number;
-	total: number;
 };
 
 type GitFile = {
@@ -118,7 +112,6 @@ type SidebarState = {
 	thinkingLevel: string;
 	stats: SessionStats;
 	todos: TodoTask[];
-	mcpServers: McpServer[];
 	gitRepos: GitRepo[];
 	rootRepo?: string;
 	linkedWorktrees: string[];
@@ -495,62 +488,6 @@ async function discoverRepositories(root: string): Promise<RepoDiscovery> {
 	return { repos: repos.sort(), linkedWorktrees: linkedWorktrees.sort() };
 }
 
-async function readJson(path: string): Promise<Record<string, unknown> | undefined> {
-	try {
-		const parsed = JSON.parse(await readFile(path, "utf8"));
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
-function serverMap(config: Record<string, unknown> | undefined): Record<string, Record<string, unknown>> {
-	const merged: Record<string, Record<string, unknown>> = {};
-	for (const raw of [config?.["mcp-servers"], config?.mcpServers]) {
-		if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
-		for (const [name, definition] of Object.entries(raw as Record<string, Record<string, unknown>>)) {
-			merged[name] = { ...(merged[name] ?? {}), ...definition };
-		}
-	}
-	return merged;
-}
-
-async function loadMcpServers(cwd: string): Promise<McpServer[]> {
-	const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-	const configs = await Promise.all([
-		readJson(join(homedir(), ".config", "mcp", "mcp.json")),
-		readJson(join(agentDir, "mcp.json")),
-		readJson(join(cwd, ".mcp.json")),
-		readJson(join(cwd, ".pi", "mcp.json")),
-	]);
-	const cache = await readJson(join(agentDir, "mcp-cache.json"));
-	const cachedServers = cache?.servers && typeof cache.servers === "object"
-		? cache.servers as Record<string, { tools?: Array<{ name?: string }>; resources?: unknown[] }>
-		: {};
-	const merged: Record<string, Record<string, unknown>> = {};
-	let globalDirect: boolean | undefined;
-	for (const config of configs) {
-		for (const [name, definition] of Object.entries(serverMap(config))) {
-			merged[name] = { ...(merged[name] ?? {}), ...definition };
-		}
-		const settings = config?.settings as { directTools?: boolean } | undefined;
-		if (typeof settings?.directTools === "boolean") globalDirect = settings.directTools;
-	}
-
-	return Object.entries(merged).sort(([a], [b]) => a.localeCompare(b)).map(([name, definition]) => {
-		const tools = cachedServers[name]?.tools ?? [];
-		const excluded = new Set(Array.isArray(definition.excludeTools) ? definition.excludeTools.filter((item): item is string => typeof item === "string") : []);
-		const visible = tools.filter((tool) => typeof tool.name === "string" && !excluded.has(tool.name));
-		const filter = definition.directTools ?? globalDirect ?? false;
-		const direct = filter === true
-			? visible.length
-			: Array.isArray(filter)
-				? visible.filter((tool) => filter.includes(tool.name)).length
-				: 0;
-		return { name, direct, total: visible.length };
-	});
-}
-
 function formatNumber(value: number): string {
 	if (value < 1_000) return String(value);
 	if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
@@ -686,7 +623,7 @@ function initialForegroundSubagents(args: unknown): SubagentRun[] {
 function subagentRunsFromAsyncStatus(value: unknown, runId: string, sessionId: string | undefined, now = Date.now()): SubagentRun[] | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const status = value as { lifecycleArtifactVersion?: unknown; runId?: unknown; sessionId?: unknown; steps?: unknown };
-	if (status.lifecycleArtifactVersion !== SUBAGENT_LIFECYCLE_VERSION || status.runId !== runId) return undefined;
+	if (!SUBAGENT_LIFECYCLE_VERSIONS.has(status.lifecycleArtifactVersion as number) || status.runId !== runId) return undefined;
 	if (sessionId && status.sessionId !== sessionId) return undefined;
 	if (!Array.isArray(status.steps)) return undefined;
 	const runs: SubagentRun[] = [];
@@ -882,21 +819,6 @@ function renderStats(state: SidebarState, theme: Theme, width: number): string[]
 	return section(theme, "Stats", rows, width);
 }
 
-function mcpItems(state: SidebarState, theme: Theme, statuses: ReadonlyMap<string, string>): string[] {
-	const items: string[] = [];
-	const live = statuses.get("mcp");
-	if (live) items.push(cleanStatusText(live));
-	for (const server of state.mcpServers) {
-		const glyph = server.total > 0 && server.direct === server.total
-			? theme.fg("success", "●")
-			: server.direct > 0
-				? theme.fg("warning", "◐")
-				: theme.fg("dim", "○");
-		items.push(`${glyph} ${theme.fg("accent", sanitizePlainText(server.name))} ${theme.fg("dim", `${server.direct}/${server.total}`)}`);
-	}
-	return items;
-}
-
 function subagentItems(state: SidebarState, theme: Theme): string[] {
 	const agents = aggregateSubagents(state.subagentRuns.values());
 	return agents.length
@@ -985,8 +907,6 @@ function renderSidebar(
 	const todos = todoItems(state, theme);
 	const extensions = extensionItems(theme, statuses);
 	const git = gitItems(state, theme, width);
-	const optionalSections = (state.mcpServers.length || statuses.has("mcp") ? 1 : 0) + 1 + (extensions.length ? 1 : 0);
-	fitSection(lines, theme, "MCP Servers", mcpItems(state, theme, statuses), width, height, 5 + (optionalSections - 1) * 4);
 	fitSection(lines, theme, todos.title, todos.items, width, height, 5 + (extensions.length ? 4 : 0));
 	fitSection(lines, theme, "Extensions", extensions, width, height, 5);
 	fitSection(lines, theme, "Git", git, width, height, 0);
@@ -1148,7 +1068,6 @@ export const __test__ = {
 	subagentRunsFromAsyncStatus,
 	aggregateSubagents,
 	formatSubagentDuration,
-	serverMap,
 	cleanStatusText,
 	replaySubagents,
 	replayTodos,
@@ -1164,7 +1083,6 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		thinkingLevel: "off",
 		stats: { ...EMPTY_STATS },
 		todos: [],
-		mcpServers: [],
 		gitRepos: [],
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
@@ -1301,9 +1219,6 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		if (refreshPromise) return refreshPromise;
 		const runGeneration = generation;
 		const promise = (async () => {
-			const mcpServers = await loadMcpServers(ctx.cwd);
-			if (runGeneration !== generation) return;
-			state.mcpServers = mcpServers;
 			const rootResult = await pi.exec("git", ["rev-parse", "--show-toplevel"], { cwd: ctx.cwd, timeout: 2_000 });
 			if (runGeneration !== generation) return;
 			if (rootResult.code !== 0) {

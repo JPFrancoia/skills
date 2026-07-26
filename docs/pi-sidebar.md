@@ -17,7 +17,6 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 - a weekly Codex headroom bar and reset countdown when Codex is active and account usage is available;
 - elapsed time, last response duration, output speed, turns, cost, tokens, cache hit rate, and active/last tool;
 - running foreground `subagent` tool children and detached async children from the active session;
-- MCP adapter status and cached direct/total tool counts per configured server;
 - `rpiv-todo` tasks from the active session branch;
 - footer indicators from other extensions, including Ponytail;
 - Git changes in the current checkout, dirty worktrees from that repository and discovered independent nested repositories, and dirty independent repositories below it.
@@ -39,7 +38,7 @@ The weekly Codex bar is the overall account percentage remaining, not usage attr
 /sidebar on              Show it
 /sidebar off             Hide it
 /sidebar width 50        Set width for this process (20–80)
-/sidebar refresh         Refresh Codex quota, Git/MCP data, and repository discovery
+/sidebar refresh         Refresh Codex quota, Git data, and repository discovery
 /sidebar status          Show current state, width, and repository count
 ```
 
@@ -53,16 +52,7 @@ Below the current checkout, directories containing their own `.git` directory be
 
 Files are grouped under their checkout or repository, and long paths are shortened from the left so the filename remains readable. If the current checkout is clean and no other worktree or nested repository qualifies, the Git section shows its header and one compact `clean` row. When the terminal is too short, the sidebar reports how many rows remain undisplayed.
 
-Git worktree membership and Git/MCP state refresh every 15 seconds and after relevant Pi events. `/sidebar refresh` also forces independent-repository rediscovery.
-
-## MCP status
-
-Pi does not expose another extension's per-server live MCP connection objects. The sidebar therefore uses:
-
-- the MCP adapter's live aggregate footer status for connection state;
-- MCP config/cache files for server names and direct/total tool counts.
-
-A cached tool count is not presented as proof that a server is currently connected.
+Git worktree membership and Git state refresh every 15 seconds and after relevant Pi events. `/sidebar refresh` also forces independent-repository rediscovery.
 
 ## Compatibility and troubleshooting
 

@@ -145,14 +145,6 @@ async function main(): Promise<void> {
 	assert.equal(__test__.isInsideLinkedWorktree("task-worktree/", ["task-worktree"]), true);
 	assert.equal(__test__.isInsideLinkedWorktree("src/task-worktree.ts", ["task-worktree"]), false);
 	assert.equal(__test__.truncatePath("very/long/path/readable-file.ts", 16).endsWith("readable-file.ts"), true);
-	assert.deepEqual(__test__.serverMap({
-		"mcp-servers": { legacy: { url: "old" }, shared: { excludeTools: ["x"] } },
-		mcpServers: { modern: { url: "new" }, shared: { directTools: true } },
-	}), {
-		legacy: { url: "old" },
-		shared: { excludeTools: ["x"], directTools: true },
-		modern: { url: "new" },
-	});
 	const safeStatus = __test__.cleanStatusText("\x1b[31mred\x1b[0m\x1b[2J\nnext");
 	assert.match(safeStatus, /\x1b\[31mred\x1b\[0m next/);
 	assert.doesNotMatch(safeStatus, /\x1b\[2J/);
@@ -210,7 +202,7 @@ async function main(): Promise<void> {
 		{ key: "foreground:call:0", agent: "worker", running: true, durationMs: 65_000, cost: 0.2 },
 		{ key: "foreground:call:1", agent: "reviewer", running: false, durationMs: 5_000, cost: 0.03 },
 	]);
-	assert.deepEqual(__test__.subagentRunsFromAsyncStatus({
+	const asyncStatus = {
 		lifecycleArtifactVersion: 2,
 		runId: "run-1",
 		sessionId: "session-1",
@@ -219,10 +211,13 @@ async function main(): Promise<void> {
 			{ agent: "worker", status: "complete", durationMs: 60_000, totalCost: { costUsd: 0.2 } },
 			{ agent: "planner", status: "pending" },
 		],
-	}, "run-1", "session-1", 11_000), [
+	};
+	const asyncRuns = [
 		{ key: "async:run-1:0", agent: "worker", running: true, durationMs: 10_000, cost: 0.1 },
 		{ key: "async:run-1:1", agent: "worker", running: false, durationMs: 60_000, cost: 0.2 },
-	]);
+	];
+	assert.deepEqual(__test__.subagentRunsFromAsyncStatus(asyncStatus, "run-1", "session-1", 11_000), asyncRuns);
+	assert.deepEqual(__test__.subagentRunsFromAsyncStatus({ ...asyncStatus, lifecycleArtifactVersion: 3 }, "run-1", "session-1", 11_000), asyncRuns);
 	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "run-1", sessionId: "other", steps: [] }, "run-1", "session-1"), undefined);
 	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 1, runId: "run-1", sessionId: "session-1", steps: [] }, "run-1", "session-1"), undefined);
 	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "wrong", sessionId: "session-1", steps: [] }, "run-1", "session-1"), undefined);
@@ -303,7 +298,6 @@ async function main(): Promise<void> {
 		thinkingLevel: "high",
 		stats: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, compactions: 2 },
 		todos: [],
-		mcpServers: [],
 		gitRepos: [],
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
@@ -347,6 +341,7 @@ async function main(): Promise<void> {
 	assert.doesNotMatch(lines.join("\n"), /clean-sibling/);
 	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
 	assert.match(lines.join("\n"), /Subagents\n─+\n\(none used\)/);
+	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map([["mcp", "MCP connected"]]), 48, 100).join("\n"), /MCP/);
 	const fullLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 100);
 	const gitHeaderIndex = fullLines.indexOf("repo");
 	assert.equal(fullLines[gitHeaderIndex + 1], "• main spoofed");
