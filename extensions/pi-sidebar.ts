@@ -1,7 +1,7 @@
 /**
  * pi-sidebar — fixed right sidebar for this Pi setup.
  *
- * Shows session/model/context/stats, rpiv-todo, extension statuses, and
+ * Shows session/model/context/turns/cost, rpiv-todo, extension statuses, and
  * root+nested-repository Git changes. Install with:
  *   pi install /absolute/path/to/extensions/pi-sidebar.ts
  *
@@ -33,22 +33,13 @@ const PRUNED_DIRS = new Set([".cache", ".next", ".venv", "build", "dist", "node_
 const GIT_REFRESH_TOOLS = new Set(["edit", "write"]);
 
 type Usage = {
-	input?: number;
-	output?: number;
-	cacheRead?: number;
-	cacheWrite?: number;
 	cost?: { total?: number };
 };
 
 type SessionStats = {
-	input: number;
-	output: number;
-	cacheRead: number;
-	cacheWrite: number;
 	cost: number;
 	turns: number;
 	compactions: number;
-	cacheHitPercent?: number;
 };
 
 type TodoTask = {
@@ -118,24 +109,12 @@ type SidebarState = {
 	workedWorktrees: Set<string>;
 	context?: { tokens: number | null; contextWindow: number; percent: number | null };
 	codexWeeklyQuota?: CodexWeeklyQuota | null;
-	messageStartedAt?: number;
-	lastResponseMs?: number;
-	liveSpeed?: number;
-	lastSpeed?: number;
-	lastTool?: string;
-	activeTools: Map<string, { name: string; startedAt: number }>;
 	subagentRuns: Map<string, SubagentRun>;
 	asyncRunDirs: Map<string, string>;
 	foregroundSubagents: Map<string, SubagentRun[]>;
-	speedSamples: Array<{ at: number; tokens: number }>;
-	sessionStartedAt: number;
 };
 
 const EMPTY_STATS: SessionStats = {
-	input: 0,
-	output: 0,
-	cacheRead: 0,
-	cacheWrite: 0,
 	cost: 0,
 	turns: 0,
 	compactions: 0,
@@ -150,17 +129,11 @@ function nonNegativeNumber(value: unknown): number | undefined {
 }
 
 function addUsage(stats: SessionStats, usage: Usage | undefined): void {
-	if (!usage) return;
-	stats.input += number(usage.input);
-	stats.output += number(usage.output);
-	stats.cacheRead += number(usage.cacheRead);
-	stats.cacheWrite += number(usage.cacheWrite);
-	stats.cost += number(usage.cost?.total);
+	stats.cost += number(usage?.cost?.total);
 }
 
 function computeSessionStats(entries: readonly unknown[]): SessionStats {
 	const stats: SessionStats = { ...EMPTY_STATS };
-	let latestUsage: Usage | undefined;
 
 	for (const raw of entries) {
 		const entry = raw as {
@@ -176,16 +149,10 @@ function computeSessionStats(entries: readonly unknown[]): SessionStats {
 		if (entry.type !== "message") continue;
 		if (entry.message?.role === "assistant") {
 			stats.turns++;
-			latestUsage = entry.message.usage;
 			addUsage(stats, entry.message.usage);
 		} else if (entry.message?.role === "toolResult") {
 			addUsage(stats, entry.message.usage);
 		}
-	}
-
-	if (latestUsage) {
-		const prompt = number(latestUsage.input) + number(latestUsage.cacheRead) + number(latestUsage.cacheWrite);
-		if (prompt > 0) stats.cacheHitPercent = (number(latestUsage.cacheRead) / prompt) * 100;
 	}
 	return stats;
 }
@@ -727,10 +694,6 @@ function padAnsi(text: string, width: number): string {
 	return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
 }
 
-function plainPad(text: string, width: number): string {
-	return truncateToWidth(text, width, "").padEnd(width);
-}
-
 function section(theme: Theme, title: string, items: string[], width: number): string[] {
 	return ["", theme.fg("text", theme.bold(title)), theme.fg("borderMuted", "─".repeat(width)), ...items];
 }
@@ -782,41 +745,9 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 				: `${theme.fg("dim", "week  ")}${weeklyQuotaBar(theme, quota.remaining)} ${theme.fg("accent", `${Math.round(quota.remaining)}%`)}${quota.resetAt === undefined ? "" : theme.fg("dim", ` resets in ${formatQuotaReset(quota.resetAt)}`)}`);
 	}
 	items.push(`${theme.fg("dim", "compactions  ")}${state.stats.compactions}`);
+	items.push(`${theme.fg("dim", "turns        ")}${state.stats.turns}`);
+	items.push(`${theme.fg("dim", "cost         ")}$${state.stats.cost.toFixed(3)}`);
 	return section(theme, "Conversation", items, width);
-}
-
-function renderStats(state: SidebarState, theme: Theme, width: number): string[] {
-	const stats = state.stats;
-	const tokenTotal = stats.input + stats.output + stats.cacheRead + stats.cacheWrite;
-	const speed = state.liveSpeed ?? state.lastSpeed;
-	const activeTool = [...state.activeTools.values()].at(-1);
-	const left: Array<[string, string]> = [
-		["time", formatDuration(Date.now() - state.sessionStartedAt)],
-		["last", formatDuration(state.lastResponseMs)],
-		["speed", speed === undefined ? "—" : `${speed.toFixed(0)} tok/s`],
-		["turns", String(stats.turns)],
-		["cost", `$${stats.cost.toFixed(3)}`],
-	];
-	const right: Array<[string, string]> = [
-		["in", stats.input ? formatNumber(stats.input) : "—"],
-		["out", stats.output ? formatNumber(stats.output) : "—"],
-		["total", tokenTotal ? formatNumber(tokenTotal) : "—"],
-		["cache", stats.cacheHitPercent === undefined ? "—" : `${stats.cacheHitPercent.toFixed(0)}%`],
-		["tool", activeTool
-			? `${activeTool.name} (${formatDuration(Date.now() - activeTool.startedAt)})${state.activeTools.size > 1 ? ` +${state.activeTools.size - 1}` : ""}`
-			: state.lastTool ?? "—"],
-	];
-	const gap = 1;
-	const column = Math.floor((width - gap) / 2);
-	const rows = [theme.fg("dim", `${plainPad("Stats", column)} ${plainPad("Tokens", width - column - gap)}`)];
-	for (let i = 0; i < left.length; i++) {
-		const [ll, lv] = left[i]!;
-		const [rl, rv] = right[i]!;
-		const first = `${ll.padEnd(6)}${lv}`;
-		const second = `${rl.padEnd(6)}${rv}`;
-		rows.push(`${theme.fg("dim", plainPad(first, column))} ${theme.fg("dim", truncateToWidth(second, width - column - gap, "…"))}`);
-	}
-	return section(theme, "Stats", rows, width);
 }
 
 function subagentItems(state: SidebarState, theme: Theme): string[] {
@@ -899,7 +830,7 @@ function renderSidebar(
 	width: number,
 	height: number,
 ): string[] {
-	const lines = [...renderCore(state, theme, width), ...renderStats(state, theme, width)];
+	const lines = renderCore(state, theme, width);
 	if (lines.length >= height) return lines.slice(0, height);
 	if (height - lines.length < 4) return lines.slice(0, height);
 	lines.push(...section(theme, "Subagents", subagentItems(state, theme), width));
@@ -1041,12 +972,6 @@ function subagentSessionId(ctx: ExtensionContext | undefined): string | undefine
 	return ctx?.sessionManager.getSessionFile() ?? ctx?.sessionManager.getSessionId() ?? undefined;
 }
 
-function sessionStartTime(ctx: ExtensionContext): number {
-	const header = ctx.sessionManager.getHeader?.() as { timestamp?: string } | undefined;
-	const timestamp = header?.timestamp ? Date.parse(header.timestamp) : Number.NaN;
-	return Number.isFinite(timestamp) ? timestamp : Date.now();
-}
-
 export const __test__ = {
 	applyNumstat,
 	codexAccountId,
@@ -1086,12 +1011,9 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		gitRepos: [],
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
-		activeTools: new Map(),
 		subagentRuns: new Map(),
 		asyncRunDirs: new Map(),
 		foregroundSubagents: new Map(),
-		speedSamples: [],
-		sessionStartedAt: Date.now(),
 	};
 	let compositor: SidebarCompositor | undefined;
 	let footerData: FooterData | undefined;
@@ -1339,16 +1261,8 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		state.asyncRunDirs = replayedSubagents.asyncRunDirs;
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		footerFallbackTimer = undefined;
-		state.sessionStartedAt = sessionStartTime(ctx);
-		state.messageStartedAt = undefined;
-		state.lastResponseMs = undefined;
-		state.liveSpeed = undefined;
-		state.lastSpeed = undefined;
-		state.lastTool = undefined;
 		state.codexWeeklyQuota = undefined;
-		state.activeTools.clear();
 		state.foregroundSubagents.clear();
-		state.speedSamples = [];
 		updateSession(ctx);
 		if (ctx.mode !== "tui") return;
 
@@ -1434,32 +1348,9 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		hideTodoWidget(ctx);
 		paint();
 	});
-	pi.on("message_start", async (event) => {
-		if (event.message.role !== "assistant") return;
-		state.messageStartedAt = Date.now();
-		state.liveSpeed = undefined;
-		state.speedSamples = [];
-	});
-	pi.on("message_update", async (event) => {
-		if (event.message.role !== "assistant") return;
-		const now = Date.now();
-		const output = number(event.message.usage?.output) || Math.round(textContent(event.message.content).length / 4);
-		if (output <= 0) return;
-		state.speedSamples.push({ at: now, tokens: output });
-		while (state.speedSamples.length > 1 && now - state.speedSamples[0]!.at > 2_000) state.speedSamples.shift();
-		const first = state.speedSamples[0];
-		if (first && now > first.at && output > first.tokens) state.liveSpeed = (output - first.tokens) / ((now - first.at) / 1_000);
-		paint();
-	});
 	pi.on("message_end", async (event, ctx) => {
 		state.ctx = ctx;
 		if (event.message.role === "assistant") {
-			const elapsed = state.messageStartedAt === undefined ? undefined : Date.now() - state.messageStartedAt;
-			state.lastResponseMs = elapsed;
-			const output = number(event.message.usage?.output);
-			state.lastSpeed = elapsed && elapsed > 0 && output > 0 ? output / (elapsed / 1_000) : state.lastSpeed;
-			state.messageStartedAt = undefined;
-			state.liveSpeed = undefined;
 			state.stats = computeSessionStats(ctx.sessionManager.getEntries());
 			state.context = ctx.getContextUsage();
 		} else if (event.message.role === "toolResult" && event.message.toolName === "todo") {
@@ -1484,13 +1375,11 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	});
 	pi.on("tool_execution_start", async (event, ctx) => {
 		state.ctx = ctx;
-		state.activeTools.set(event.toolCallId, { name: event.toolName, startedAt: Date.now() });
 		if (event.toolName === "subagent") {
 			const initial = initialForegroundSubagents(event.args).map((run, index) => ({ ...run, key: `foreground:${event.toolCallId}:${index}` }));
 			state.foregroundSubagents.set(event.toolCallId, initial);
 			for (const run of initial) rememberSubagentRun(run, true);
 		}
-		state.lastTool = event.toolName;
 		paint();
 	});
 	pi.on("tool_execution_update", async (event) => {
@@ -1504,7 +1393,6 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		paint();
 	});
 	pi.on("tool_execution_end", async (event) => {
-		state.activeTools.delete(event.toolCallId);
 		for (const run of state.foregroundSubagents.get(event.toolCallId) ?? []) {
 			const current = state.subagentRuns.get(run.key);
 			if (current?.running) state.subagentRuns.set(run.key, { ...current, running: false });

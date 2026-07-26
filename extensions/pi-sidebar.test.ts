@@ -34,11 +34,7 @@ async function main(): Promise<void> {
 		{ type: "compaction" },
 		{ type: "message", message: { role: "assistant", usage: { input: 20, output: 5, cacheRead: 10, cacheWrite: 0, cost: { total: 0.2 } } } },
 	]);
-	assert.deepEqual(
-		{ input: stats.input, output: stats.output, cacheRead: stats.cacheRead, cacheWrite: stats.cacheWrite, turns: stats.turns, compactions: stats.compactions, cost: stats.cost },
-		{ input: 36, output: 11, cacheRead: 16, cacheWrite: 2, turns: 2, compactions: 2, cost: 0.35000000000000003 },
-	);
-	assert.ok(Math.abs((stats.cacheHitPercent ?? 0) - (100 / 3)) < 0.001);
+	assert.deepEqual(stats, { turns: 2, compactions: 2, cost: 0.35000000000000003 });
 
 	const todos = __test__.replayTodos([
 		{ type: "message", message: { role: "toolResult", toolName: "todo", details: { tasks: [{ id: 1, subject: "old", status: "pending" }], nextId: 2 } } },
@@ -296,17 +292,14 @@ async function main(): Promise<void> {
 		enabled: true,
 		width: 48,
 		thinkingLevel: "high",
-		stats: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0, compactions: 2 },
+		stats: { cost: 0, turns: 0, compactions: 2 },
 		todos: [],
 		gitRepos: [],
 		linkedWorktrees: [],
 		workedWorktrees: new Set(),
-		activeTools: new Map(),
 		subagentRuns: new Map(),
 		asyncRunDirs: new Map(),
 		foregroundSubagents: new Map(),
-		speedSamples: [],
-		sessionStartedAt: Date.now(),
 	};
 	const compositor = new __test__.SidebarCompositor(tui as never, () => state as never, () => theme as never, () => new Map());
 	assert.equal(compositor.install(), true);
@@ -318,8 +311,6 @@ async function main(): Promise<void> {
 	assert.equal(terminal.columns, 120);
 	assert.equal(tui.doRender, originalRender);
 
-	state.activeTools.set("one", { name: "read", startedAt: Date.now() - 2_000 });
-	state.activeTools.set("two", { name: "bash", startedAt: Date.now() - 1_000 });
 	state.rootRepo = "/repo";
 	state.gitRepos = [{
 		path: "/repo",
@@ -336,10 +327,10 @@ async function main(): Promise<void> {
 	assert.ok(lines.length <= 24);
 	assert.ok(lines.every((line) => visibleWidth(line) <= 48 && !line.includes("\n")));
 	const contextIndex = lines.findIndex((line) => line.startsWith("ctx "));
-	assert.equal(lines[contextIndex + 1], "compactions  2");
+	assert.deepEqual(lines.slice(contextIndex + 1, contextIndex + 4), ["compactions  2", "turns        0", "cost         $0.000"]);
+	assert.doesNotMatch(lines.join("\n"), /Stats|Tokens/);
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
 	assert.doesNotMatch(lines.join("\n"), /clean-sibling/);
-	assert.match(lines.join("\n"), /bash \(1s\) \+1/);
 	assert.match(lines.join("\n"), /Subagents\n─+\n\(none used\)/);
 	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map([["mcp", "MCP connected"]]), 48, 100).join("\n"), /MCP/);
 	const fullLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 100);
@@ -365,7 +356,7 @@ async function main(): Promise<void> {
 	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
 	assert.match(quotaLines.join("\n"), /week  ████████░░ 83% resets in 6d/);
 	const weekIndex = quotaLines.findIndex((line) => line.startsWith("week "));
-	assert.equal(quotaLines[weekIndex + 1], "compactions  2");
+	assert.deepEqual(quotaLines.slice(weekIndex + 1, weekIndex + 4), ["compactions  2", "turns        0", "cost         $0.000"]);
 	state.codexWeeklyQuota = undefined;
 	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week  loading…/);
 	state.codexWeeklyQuota = null;
@@ -389,7 +380,7 @@ async function main(): Promise<void> {
 	state.gitRepos = [{ path: "/repo", label: "repo", branch: "?", files: [], error: "git status failed" }];
 	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /git status failed/);
 	const spacedLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
-	for (const title of ["Conversation", "Stats", "Subagents", "Todos (0/0)", "Git"]) {
+	for (const title of ["Conversation", "Subagents", "Todos (0/0)", "Git"]) {
 		assert.equal(spacedLines[spacedLines.indexOf(title) - 1], "");
 	}
 }

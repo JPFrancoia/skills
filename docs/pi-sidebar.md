@@ -13,9 +13,8 @@ Reload an open Pi session with `/reload`, or start a new session. Do not load th
 ## Displayed data
 
 - conversation name, with the first user message as fallback;
-- model, thinking level, cwd, context use, and conversation compaction count;
+- model, thinking level, cwd, context use, conversation compaction count, turns, and cost;
 - a weekly Codex headroom bar and reset countdown when Codex is active and account usage is available;
-- elapsed time, last response duration, output speed, turns, cost, tokens, cache hit rate, and active/last tool;
 - running foreground `subagent` tool children and detached async children from the active session;
 - `rpiv-todo` tasks from the active session branch;
 - footer indicators from other extensions, including Ponytail;
@@ -25,11 +24,11 @@ The native footer and `rpiv-todo`'s above-editor widget are hidden because their
 
 ## Subagents
 
-The **Subagents** section appears directly after Stats and keeps one row for every top-level agent used in the active Pi session branch, including foreground `subagent` calls and detached async runs. Rows remain after a child stops and survive reload, compaction, and `/tree` navigation within that branch. A green dot means at least one invocation of that agent is running; a red dot means none are running. Each row shows cumulative child runtime and cost for that agent's invocations (`1m46s · $0.4660`); parallel child durations are summed. Pending children and nested descendants are not listed, and totals do not carry across Pi sessions. The section refreshes every second and shows `(none used)` until a child starts.
+The **Subagents** section appears directly after Conversation and keeps one row for every top-level agent used in the active Pi session branch, including foreground `subagent` calls and detached async runs. Rows remain after a child stops and survive reload, compaction, and `/tree` navigation within that branch. A green dot means at least one invocation of that agent is running; a red dot means none are running. Each row shows cumulative child runtime and cost for that agent's invocations (`1m46s · $0.4660`); parallel child durations are summed. Pending children and nested descendants are not listed, and totals do not carry across Pi sessions. The section refreshes every second and shows `(none used)` until a child starts.
 
 Async metrics use pi-subagents' versioned run status when available, with its event-bus RPC as a running-status fallback. Missing or invalid status data leaves the last recorded row and totals intact. Use `/subagents-fleet` for detailed run inspection and controls.
 
-The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. Its value starts in the same column as the context percentage and ends with `resets in Xd`, or `resets in Xh` below one day. The conversation compaction count appears directly beneath it, or beneath context usage when Codex quota is not shown. The extension resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
+The weekly Codex bar is the overall account percentage remaining, not usage attributed to the current conversation. Its value starts in the same column as the context percentage and ends with `resets in Xd`, or `resets in Xh` below one day. The conversation compaction count appears directly beneath it, or beneath context usage when Codex quota is not shown. Turns and cost follow directly below the compaction count. The extension resolves the current Codex OAuth token through Pi and queries OpenAI's account-usage endpoint at session start, after completed agent runs, on Codex model selection, and on `/sidebar refresh`. Tokens and responses remain in memory and are never logged or persisted. The bar shows `loading…` or `unavailable` when authentication, the request, or the response fails.
 
 ## Commands
 
