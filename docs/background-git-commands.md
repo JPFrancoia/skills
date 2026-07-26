@@ -26,6 +26,8 @@ Type `/m ` or `/pr ` (including the trailing space) to list discovered checkouts
 
 Repository/worktree membership is cached after the first completion request in a session, while staged state is checked each time. Run `/reload` after adding or removing a worktree or nested repository.
 
+Install only the extension versions of `/m` and `/pr` when using autocomplete. The files `commands/m.md` and `commands/pr.md` are fallbacks for setups where the extensions are unavailable; installing them as prompt templates alongside the extensions creates duplicate command entries, and current Pi versions may choose the prompt entry without argument completion.
+
 ## Staged changes and workflow
 
 Both commands require staged changes in the selected repository and do not stage files for you. Choose one command for a staged index: use `/m` when you only want the commit, or `/pr` when you want the complete commit-and-pull-request workflow. Do not run `/m` and then `/pr` for the same changes, because `/pr` includes the commit step.
