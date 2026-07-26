@@ -5,10 +5,12 @@ const RPC_REQUEST = "subagents:rpc:v1:request";
 const RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
 
 type Result = { code: number; stdout: string; stderr: string };
+type ExecCall = { command: string; args: string[] };
 
 type Harness = {
 	handler: (args: string, ctx: unknown) => Promise<void>;
 	ctx: unknown;
+	calls: ExecCall[];
 	emitted: () => unknown;
 	notifications: string[];
 };
@@ -16,13 +18,15 @@ type Harness = {
 function harness(results: Result[], sessionFile = "/dev/null", leafId: string | null = "leaf-id"): Harness {
 	let handler: Harness["handler"] | undefined;
 	let emitted: unknown;
+	const calls: ExecCall[] = [];
 	const listeners = new Map<string, (data: unknown) => void>();
 	const notifications: string[] = [];
 	const pi = {
 		registerCommand(_name: string, options: { handler: Harness["handler"] }) {
 			handler = options.handler;
 		},
-		exec: async () => {
+		exec: async (command: string, args: string[]) => {
+			calls.push({ command, args });
 			const result = results.shift();
 			assert.ok(result, "unexpected git invocation");
 			return result;
@@ -53,6 +57,7 @@ function harness(results: Result[], sessionFile = "/dev/null", leafId: string | 
 			},
 			ui: { notify: (message: string) => notifications.push(message) },
 		},
+		calls,
 		emitted: () => emitted,
 		notifications,
 	};
@@ -61,11 +66,79 @@ function harness(results: Result[], sessionFile = "/dev/null", leafId: string | 
 async function main(): Promise<void> {
 	assert.equal(__test__.repoArgument(""), ".");
 	assert.equal(__test__.repoArgument("'nested repo'"), "nested repo");
+	assert.deepEqual(__test__.parseWorktrees([
+		"worktree /work/main",
+		"HEAD abc123",
+		"branch refs/heads/main",
+		"",
+		"worktree /work/task checkout ",
+		"HEAD def456",
+		"branch refs/heads/feat/task",
+		"",
+		"worktree /work/bare.git",
+		"bare",
+		"",
+	].join("\0")), [
+		{ path: "/work/main", branch: "main" },
+		{ path: "/work/task checkout ", branch: "feat/task" },
+	]);
 
-	const invalid = harness([{ code: 128, stdout: "", stderr: "not a repository" }]);
+	const invalid = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 128, stdout: "", stderr: "not a repository" },
+	]);
 	await invalid.handler("missing", invalid.ctx);
 	assert.equal(invalid.emitted(), undefined);
 	assert.match(invalid.notifications[0] ?? "", /not a Git repository/);
+
+	const worktreeList = [
+		"worktree /work",
+		"HEAD abc123",
+		"branch refs/heads/main",
+		"",
+		"worktree /sibling/task-worktree",
+		"HEAD def456",
+		"branch refs/heads/feat/task-worktree",
+		"",
+	].join("\0");
+	const basenameTarget = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 0, stdout: worktreeList, stderr: "" },
+		{ code: 0, stdout: "/sibling/task-worktree\n", stderr: "" },
+		{ code: 1, stdout: "", stderr: "" },
+	]);
+	await basenameTarget.handler("task-worktree", basenameTarget.ctx);
+	assert.equal((basenameTarget.emitted() as { params: { cwd: string } }).params.cwd, "/sibling/task-worktree");
+	assert.deepEqual(basenameTarget.calls, [
+		{ command: "git", args: ["-C", "/work/task-worktree", "rev-parse", "--show-toplevel"] },
+		{ command: "git", args: ["-C", "/work", "worktree", "list", "--porcelain", "-z"] },
+		{ command: "git", args: ["-C", "/sibling/task-worktree", "rev-parse", "--show-toplevel"] },
+		{ command: "git", args: ["-C", "/sibling/task-worktree", "diff", "--cached", "--quiet", "--exit-code"] },
+	]);
+
+	const branchTarget = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 0, stdout: worktreeList, stderr: "" },
+		{ code: 0, stdout: "/sibling/task-worktree\n", stderr: "" },
+		{ code: 1, stdout: "", stderr: "" },
+	]);
+	await branchTarget.handler("feat/task-worktree", branchTarget.ctx);
+	assert.equal((branchTarget.emitted() as { params: { cwd: string } }).params.cwd, "/sibling/task-worktree");
+
+	const ambiguous = harness([
+		{ code: 128, stdout: "", stderr: "not a repository" },
+		{ code: 0, stdout: [
+			"worktree /one/task",
+			"branch refs/heads/feat/one",
+			"",
+			"worktree /two/other",
+			"branch refs/heads/task",
+			"",
+		].join("\0"), stderr: "" },
+	]);
+	await ambiguous.handler("task", ambiguous.ctx);
+	assert.equal(ambiguous.emitted(), undefined);
+	assert.match(ambiguous.notifications[0] ?? "", /Ambiguous worktree task: \/one\/task, \/two\/other/);
 
 	const clean = harness([
 		{ code: 0, stdout: "/work/repo\n", stderr: "" },
@@ -92,6 +165,10 @@ async function main(): Promise<void> {
 	assert.match(request.params.task, /Target repository: \/work\/enterprise/);
 	assert.match(request.params.task, /Use git -C with that exact path/);
 	assert.doesNotMatch(request.params.task, /Expected HEAD|Expected staged tree/);
+	assert.deepEqual(staged.calls, [
+		{ command: "git", args: ["-C", "/work/enterprise", "rev-parse", "--show-toplevel"] },
+		{ command: "git", args: ["-C", "/work/enterprise", "diff", "--cached", "--quiet", "--exit-code"] },
+	]);
 
 	const emptySession = harness([
 		{ code: 0, stdout: "/work/enterprise\n", stderr: "" },

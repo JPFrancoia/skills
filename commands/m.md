@@ -11,11 +11,17 @@ This prompt is the fallback when the `pi-background-commit` extension is not loa
 
 ### 1. Resolve the Target Repository
 
-Resolve `${1:-.}` relative to the conversation's current working directory, then find its Git root. Stop if it is not a repository or has no staged changes.
+Resolve `${1:-.}` in this order:
+
+1. Try it as an absolute or cwd-relative path with `git -C <target> rev-parse --show-toplevel`.
+2. If that fails, run `git worktree list --porcelain -z` from the repository containing the conversation cwd.
+3. Match a unique non-bare worktree whose directory basename or short branch name equals the argument.
+4. Stop and list the matching paths if the selector is ambiguous; stop if no repository matches.
+
+Verify the selected Git root and stop if it has no staged changes:
 
 ```bash
-git -C "${1:-.}" rev-parse --show-toplevel
-git -C "${1:-.}" diff --cached --quiet --exit-code
+git -C "<resolved-git-root>" diff --cached --quiet --exit-code
 ```
 
 ### 2. Launch the Commit Agent

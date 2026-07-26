@@ -7,7 +7,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 const RPC_REQUEST = "subagents:rpc:v1:request";
 const RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
@@ -39,6 +39,50 @@ async function git(pi: ExtensionAPI, cwd: string, args: string[]) {
 	return pi.exec("git", ["-C", cwd, ...args], { timeout: 5_000 });
 }
 
+type Worktree = { path: string; branch?: string };
+
+function parseWorktrees(output: string): Worktree[] {
+	const worktrees: Worktree[] = [];
+	let path: string | undefined;
+	let branch: string | undefined;
+	let bare = false;
+	const flush = () => {
+		if (path && !bare) worktrees.push({ path: resolve(path), branch });
+		path = undefined;
+		branch = undefined;
+		bare = false;
+	};
+	for (const token of output.split("\0")) {
+		if (!token) {
+			flush();
+			continue;
+		}
+		if (token.startsWith("worktree ")) path = token.slice("worktree ".length);
+		else if (token.startsWith("branch refs/heads/")) branch = token.slice("branch refs/heads/".length);
+		else if (token === "bare") bare = true;
+	}
+	flush();
+	return worktrees;
+}
+
+async function resolveRepository(pi: ExtensionAPI, cwd: string, selector: string): Promise<{ repository?: string; error?: string }> {
+	const direct = await git(pi, resolve(cwd, selector), ["rev-parse", "--show-toplevel"]);
+	if (direct.code === 0) return { repository: direct.stdout.replace(/[\r\n]+$/, "") };
+
+	const listed = await git(pi, cwd, ["worktree", "list", "--porcelain", "-z"]);
+	if (listed.code !== 0) return { error: `${selector} is not a Git repository.` };
+	const matches = [...new Set(parseWorktrees(listed.stdout)
+		.filter((worktree) => basename(worktree.path) === selector || worktree.branch === selector)
+		.map((worktree) => worktree.path))];
+	if (matches.length > 1) return { error: `Ambiguous worktree ${selector}: ${matches.join(", ")}` };
+	if (matches.length === 0) return { error: `${selector} is not a Git repository.` };
+
+	const matched = await git(pi, matches[0]!, ["rev-parse", "--show-toplevel"]);
+	return matched.code === 0
+		? { repository: matched.stdout.replace(/[\r\n]+$/, "") }
+		: { error: `${selector} is not a Git repository.` };
+}
+
 function watchLaunchReply(pi: ExtensionAPI, ctx: ExtensionContext, requestId: string, repository: string): void {
 	const event = `${RPC_REPLY_PREFIX}${requestId}`;
 	let unsubscribe: (() => void) | undefined;
@@ -65,13 +109,12 @@ export default function (pi: ExtensionAPI) {
 		description: "Commit, push, open a PR or MR, and watch CI in the background",
 		getArgumentCompletions: () => null,
 		handler: async (args, ctx) => {
-			const requested = resolve(ctx.cwd, repoArgument(args));
-			const rootResult = await git(pi, requested, ["rev-parse", "--show-toplevel"]);
-			if (rootResult.code !== 0) {
-				notify(ctx, `${repoArgument(args)} is not a Git repository.`, "error");
+			const target = await resolveRepository(pi, ctx.cwd, repoArgument(args));
+			if (!target.repository) {
+				notify(ctx, target.error ?? "Could not resolve Git repository.", "error");
 				return;
 			}
-			const repository = rootResult.stdout.replace(/[\r\n]+$/, "");
+			const repository = target.repository;
 
 			const stagedResult = await git(pi, repository, ["diff", "--cached", "--quiet", "--exit-code"]);
 			if (stagedResult.code === 0) {
@@ -109,4 +152,4 @@ export default function (pi: ExtensionAPI) {
 	});
 }
 
-export const __test__ = { repoArgument };
+export const __test__ = { parseWorktrees, repoArgument };
