@@ -684,9 +684,11 @@ function formatQuotaReset(resetAt: number, now = Date.now()): string {
 		: `${Math.ceil(remaining / (60 * 60 * 1_000))}h`;
 }
 
-function weeklyQuotaBar(theme: Theme, remaining: number): string {
-	const filled = Math.round((remaining / 100) * WEEKLY_QUOTA_BAR_WIDTH);
-	const color = remaining <= 20 ? "error" : remaining <= 50 ? "warning" : "success";
+function weeklyQuotaBar(theme: Theme, value: number, filledIsBad = false): string {
+	const filled = Math.round((value / 100) * WEEKLY_QUOTA_BAR_WIDTH);
+	const color = filledIsBad
+		? value >= 80 ? "error" : value >= 50 ? "warning" : "success"
+		: value <= 20 ? "error" : value <= 50 ? "warning" : "success";
 	return `${theme.fg(color, "█".repeat(filled))}${theme.fg("dim", "░".repeat(WEEKLY_QUOTA_BAR_WIDTH - filled))}`;
 }
 
@@ -728,7 +730,7 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 	const location = truncatePath(sanitizePlainText(collapseHome(ctx?.cwd ?? "")), Math.max(1, width - 6));
 	const usage = state.context;
 	const contextLine = usage
-		? `${usage.percent === null ? "?" : `${usage.percent.toFixed(1)}%`} • ${usage.tokens === null ? "?" : formatNumber(usage.tokens)} of ${formatNumber(usage.contextWindow)}`
+		? `${usage.percent === null ? "?" : `${weeklyQuotaBar(theme, usage.percent, true)} ${usage.percent.toFixed(1)}%`} • ${usage.tokens === null ? "?" : formatNumber(usage.tokens)} of ${formatNumber(usage.contextWindow)}`
 		: "not available yet";
 	const items = [
 		theme.fg("text", title),
@@ -738,6 +740,7 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 	];
 	if (model?.provider === "openai-codex") {
 		const quota = state.codexWeeklyQuota;
+		items.push("");
 		items.push(quota === undefined
 			? `${theme.fg("dim", "week  ")}${theme.fg("warning", "loading…")}`
 			: quota === null

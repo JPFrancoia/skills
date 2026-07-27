@@ -300,6 +300,7 @@ async function main(): Promise<void> {
 		subagentRuns: new Map(),
 		asyncRunDirs: new Map(),
 		foregroundSubagents: new Map(),
+		context: { tokens: 83_000, contextWindow: 100_000, percent: 83 },
 	};
 	const compositor = new __test__.SidebarCompositor(tui as never, () => state as never, () => theme as never, () => new Map());
 	assert.equal(compositor.install(), true);
@@ -327,6 +328,7 @@ async function main(): Promise<void> {
 	assert.ok(lines.length <= 24);
 	assert.ok(lines.every((line) => visibleWidth(line) <= 48 && !line.includes("\n")));
 	const contextIndex = lines.findIndex((line) => line.startsWith("ctx "));
+	assert.equal(lines[contextIndex], "ctx   ████████░░ 83.0% • 83k of 100k");
 	assert.deepEqual(lines.slice(contextIndex + 1, contextIndex + 4), ["compactions  2", "turns        0", "cost         $0.000"]);
 	assert.doesNotMatch(lines.join("\n"), /Stats|Tokens/);
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);
@@ -344,6 +346,7 @@ async function main(): Promise<void> {
 		fg: (color: string, text: string) => `\x1b[${color === "success" ? 32 : color === "error" ? 31 : 37}m${text}\x1b[0m`,
 	};
 	const subagentLines = __test__.renderSidebar(state as never, colorTheme as never, new Map(), 48, 40).join("\n");
+	assert.match(subagentLines, /\x1b\[31m██/);
 	assert.match(subagentLines, /\x1b\[31m●/);
 	assert.match(subagentLines, /scout spoofed/);
 	assert.match(subagentLines, /1m · \$0\.2337/);
@@ -356,6 +359,7 @@ async function main(): Promise<void> {
 	const quotaLines = __test__.renderSidebar(state as never, theme as never, new Map(), 48, 40);
 	assert.match(quotaLines.join("\n"), /week  ████████░░ 83% resets in 6d/);
 	const weekIndex = quotaLines.findIndex((line) => line.startsWith("week "));
+	assert.equal(quotaLines[weekIndex - 1], "");
 	assert.deepEqual(quotaLines.slice(weekIndex + 1, weekIndex + 4), ["compactions  2", "turns        0", "cost         $0.000"]);
 	state.codexWeeklyQuota = undefined;
 	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 40).join("\n"), /week  loading…/);
