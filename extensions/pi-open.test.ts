@@ -65,7 +65,7 @@ const rendered = markdown(
 );
 assert.equal(
 	rendered,
-	["### acme/group/sub/widgets", "- [New](u2) — 12h ago", "- [Old](u1) — 9d ago", "", "### acme/gadgets", "_No open requests._", "", "- ⚠️ boom"].join("\n"),
+	["### acme/group/sub/widgets", "- [New](u2) — 12h ago", "- [Old](u1) — 9d ago", "", "- ⚠️ boom"].join("\n"),
 );
 
 console.log("ok");

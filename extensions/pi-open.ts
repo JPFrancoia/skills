@@ -3,8 +3,8 @@
  *
  * REPOS is a comma-separated list of repository URLs, for example:
  *   REPOS=https://gitlab.com/acme/group/widgets,https://github.com/acme/gadgets
- * gitlab.* hosts use `glab`, github.* hosts use `gh`. No agent runs: this is a
- * plain fetch rendered as markdown in the transcript only.
+ * gitlab.* hosts use `glab`, github.* hosts use `gh`. This is a plain fetch
+ * added to the conversation context without triggering an agent turn.
  *
  * Install by symlinking this file into ~/.pi/agent/extensions/ and running /reload.
  */
@@ -73,9 +73,8 @@ function age(createdAt: string, now: number): string {
 
 function markdown(groups: Array<{ repo: Repo; requests: Request[] }>, errors: string[], now: number): string {
 	const blocks: string[] = [];
-	for (const group of groups) {
+	for (const group of groups.filter(({ requests }) => requests.length > 0)) {
 		const lines = [`### ${group.repo.path}`];
-		if (group.requests.length === 0) lines.push("_No open requests._");
 		for (const request of [...group.requests].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))) {
 			lines.push(`- [${request.title}](${request.url}) — ${age(request.createdAt, now)}`);
 		}
@@ -86,7 +85,7 @@ function markdown(groups: Array<{ repo: Repo; requests: Request[] }>, errors: st
 }
 
 export default function (pi: ExtensionAPI) {
-	pi.registerEntryRenderer<{ markdown: string }>(ENTRY, (entry) => new Markdown(entry.data?.markdown ?? "", 1, 0, getMarkdownTheme()));
+	pi.registerMessageRenderer(ENTRY, (message) => new Markdown(typeof message.content === "string" ? message.content : "", 1, 0, getMarkdownTheme()));
 
 	pi.registerCommand("open", {
 		description: "List open MRs/PRs for the repositories in $REPOS",
@@ -117,7 +116,7 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
-			pi.appendEntry(ENTRY, { markdown: markdown(groups, errors, Date.now()) });
+			pi.sendMessage({ customType: ENTRY, content: markdown(groups, errors, Date.now()), display: true }, { triggerTurn: false });
 		},
 	});
 }
