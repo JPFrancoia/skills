@@ -329,6 +329,9 @@ async function main(): Promise<void> {
 	assert.ok(lines.every((line) => visibleWidth(line) <= 48 && !line.includes("\n")));
 	const contextIndex = lines.findIndex((line) => line.startsWith("ctx "));
 	assert.equal(lines[contextIndex], "ctx   ████████░░ 83.0% • 83k of 100k");
+	state.context = { tokens: 110_000, contextWindow: 100_000, percent: 110 };
+	assert.match(__test__.renderSidebar(state as never, theme as never, new Map(), 48, 24).join("\n"), /ctx   ██████████ 110\.0%/);
+	state.context = { tokens: 83_000, contextWindow: 100_000, percent: 83 };
 	assert.deepEqual(lines.slice(contextIndex + 1, contextIndex + 4), ["compactions  2", "turns        0", "cost         $0.000"]);
 	assert.doesNotMatch(lines.join("\n"), /Stats|Tokens/);
 	assert.doesNotMatch(lines.join(""), /\x1b\[2J/);

@@ -685,7 +685,7 @@ function formatQuotaReset(resetAt: number, now = Date.now()): string {
 }
 
 function weeklyQuotaBar(theme: Theme, value: number, filledIsBad = false): string {
-	const filled = Math.round((value / 100) * WEEKLY_QUOTA_BAR_WIDTH);
+	const filled = Math.max(0, Math.min(WEEKLY_QUOTA_BAR_WIDTH, Math.round((value / 100) * WEEKLY_QUOTA_BAR_WIDTH)));
 	const color = filledIsBad
 		? value >= 80 ? "error" : value >= 50 ? "warning" : "success"
 		: value <= 20 ? "error" : value <= 50 ? "warning" : "success";
