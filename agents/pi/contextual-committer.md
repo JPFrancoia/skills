@@ -3,7 +3,7 @@ name: contextual-committer
 description: Commit the target repository's currently staged changes with a contextual commit message.
 tools: bash
 model: openai-codex/gpt-5.6-luna
-fallbackModels: vertex-claude/claude-opus-4-8:high
+fallbackModels: vertex-claude/claude-opus-5:high
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true

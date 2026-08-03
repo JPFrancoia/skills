@@ -30,18 +30,30 @@ assert.deepEqual(parseRepos(undefined), { repos: [], errors: [] });
 
 assert.deepEqual(command(parsed.repos[0]), {
 	command: "glab",
-	args: ["api", "--hostname", "gitlab.com", "projects/acme%2Fgroup%2Fsub%2Fwidgets/merge_requests?state=opened&per_page=100"],
+	args: [
+		"api",
+		"--hostname",
+		"gitlab.com",
+		"graphql",
+		"-f",
+		'query={project(fullPath:"acme/group/sub/widgets"){mergeRequests(state:opened,first:100){nodes{title webUrl createdAt approved author{username}}}}}',
+	],
 });
 assert.deepEqual(command(parsed.repos[1]), {
 	command: "gh",
-	args: ["pr", "list", "--repo", "github.com/acme/gadgets", "--state", "open", "--limit", "100", "--json", "title,url,createdAt"],
+	args: ["pr", "list", "--repo", "github.com/acme/gadgets", "--state", "open", "--limit", "100", "--json", "title,url,createdAt,author,reviewDecision"],
 });
 
-assert.deepEqual(requests(parsed.repos[0], JSON.stringify([{ title: "Fix", web_url: "u", created_at: "c" }])), [
-	{ title: "Fix", url: "u", createdAt: "c" },
+const nodes = (...nodes: unknown[]) => JSON.stringify({ data: { project: { mergeRequests: { nodes } } } });
+assert.deepEqual(requests(parsed.repos[0], nodes({ title: "Fix", webUrl: "u", createdAt: "c", approved: true, author: { username: "alice" } })), [
+	{ title: "Fix", url: "u", createdAt: "c", author: "alice", approved: true },
 ]);
-assert.deepEqual(requests(parsed.repos[1], JSON.stringify([{ title: "T", url: "u", createdAt: "c" }])), [
-	{ title: "T", url: "u", createdAt: "c" },
+assert.deepEqual(requests(parsed.repos[0], JSON.stringify({ data: { project: null } })), []);
+assert.deepEqual(requests(parsed.repos[1], JSON.stringify([{ title: "T", url: "u", createdAt: "c", author: { login: "bob" }, reviewDecision: "APPROVED" }])), [
+	{ title: "T", url: "u", createdAt: "c", author: "bob", approved: true },
+]);
+assert.deepEqual(requests(parsed.repos[1], JSON.stringify([{ title: "T", url: "u", createdAt: "c", reviewDecision: "REVIEW_REQUIRED" }])), [
+	{ title: "T", url: "u", createdAt: "c", author: "unknown", approved: false },
 ]);
 
 const now = Date.parse("2026-01-10T00:00:00Z");
@@ -54,8 +66,8 @@ const rendered = markdown(
 		{
 			repo: parsed.repos[0],
 			requests: [
-				{ title: "Old", url: "u1", createdAt: "2026-01-01T00:00:00Z" },
-				{ title: "New", url: "u2", createdAt: "2026-01-09T12:00:00Z" },
+				{ title: "Old", url: "u1", createdAt: "2026-01-01T00:00:00Z", author: "alice", approved: true },
+				{ title: "New", url: "u2", createdAt: "2026-01-09T12:00:00Z", author: "bob", approved: false },
 			],
 		},
 		{ repo: parsed.repos[1], requests: [] },
@@ -65,7 +77,7 @@ const rendered = markdown(
 );
 assert.equal(
 	rendered,
-	["### acme/group/sub/widgets", "- [New](u2) — 12h ago", "- [Old](u1) — 9d ago", "", "- ⚠️ boom"].join("\n"),
+	["### acme/group/sub/widgets", "- [New](u2) — 12h ago [bob]", "- [Old](u1) — 9d ago (approved) [alice]", "", "- ⚠️ boom"].join("\n"),
 );
 
 console.log("ok");
