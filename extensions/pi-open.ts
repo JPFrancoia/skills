@@ -15,7 +15,7 @@ import { Markdown } from "@earendil-works/pi-tui";
 const ENTRY = "open-requests";
 const TIMEOUT_MS = 60_000;
 
-type Request = { title: string; url: string; createdAt: string };
+type Request = { title: string; url: string; createdAt: string; author: string; approved: boolean };
 
 type Repo = { host: string; path: string; forge: "gitlab" | "github" };
 
@@ -43,23 +43,35 @@ function parseRepos(value: string | undefined): { repos: Repo[]; errors: string[
 
 function command(repo: Repo): { command: string; args: string[] } {
 	if (repo.forge === "gitlab") {
+		// GraphQL, not REST: the REST merge_requests list omits approval state,
+		// which would cost one extra /approvals call per merge request.
 		return {
 			command: "glab",
-			args: ["api", "--hostname", repo.host, `projects/${encodeURIComponent(repo.path)}/merge_requests?state=opened&per_page=100`],
+			args: [
+				"api",
+				"--hostname",
+				repo.host,
+				"graphql",
+				"-f",
+				`query={project(fullPath:"${repo.path}"){mergeRequests(state:opened,first:100){nodes{title webUrl createdAt approved author{username}}}}}`,
+			],
 		};
 	}
 	return {
 		command: "gh",
-		args: ["pr", "list", "--repo", `${repo.host}/${repo.path}`, "--state", "open", "--limit", "100", "--json", "title,url,createdAt"],
+		args: ["pr", "list", "--repo", `${repo.host}/${repo.path}`, "--state", "open", "--limit", "100", "--json", "title,url,createdAt,author,reviewDecision"],
 	};
 }
 
 function requests(repo: Repo, stdout: string): Request[] {
-	const items = JSON.parse(stdout || "[]") as Array<Record<string, string>>;
-	return items.map((item) => ({
+	const parsed = JSON.parse(stdout || "[]");
+	const items = (repo.forge === "gitlab" ? parsed?.data?.project?.mergeRequests?.nodes : parsed) as Array<Record<string, any>> | undefined;
+	return (items ?? []).map((item) => ({
 		title: item.title,
-		url: repo.forge === "gitlab" ? item.web_url : item.url,
-		createdAt: repo.forge === "gitlab" ? item.created_at : item.createdAt,
+		url: repo.forge === "gitlab" ? item.webUrl : item.url,
+		createdAt: item.createdAt,
+		author: (repo.forge === "gitlab" ? item.author?.username : item.author?.login) ?? "unknown",
+		approved: repo.forge === "gitlab" ? item.approved === true : item.reviewDecision === "APPROVED",
 	}));
 }
 
@@ -76,7 +88,7 @@ function markdown(groups: Array<{ repo: Repo; requests: Request[] }>, errors: st
 	for (const group of groups.filter(({ requests }) => requests.length > 0)) {
 		const lines = [`### ${group.repo.path}`];
 		for (const request of [...group.requests].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))) {
-			lines.push(`- [${request.title}](${request.url}) — ${age(request.createdAt, now)}`);
+			lines.push(`- [${request.title}](${request.url}) — ${age(request.createdAt, now)}${request.approved ? " (approved)" : ""} [${request.author}]`);
 		}
 		blocks.push(lines.join("\n"));
 	}

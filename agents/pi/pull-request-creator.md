@@ -3,7 +3,7 @@ name: pull-request-creator
 description: Commit staged changes, push a branch, open a GitHub PR or GitLab MR, and watch CI.
 tools: bash
 model: openai-codex/gpt-5.6-luna
-fallbackModels: vertex-claude/claude-opus-4-8:high
+fallbackModels: vertex-claude/claude-opus-5:high
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true
