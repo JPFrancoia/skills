@@ -25,7 +25,7 @@ Build a full-height right sidebar tailored to this Pi setup, then move the exist
 - Only one extension should own this compositor and the `pi-sidebar` widget key.
 - `rpiv-todo` persists the complete task snapshot in `toolResult.details` for tool name `todo`. The latest valid snapshot on the active branch is authoritative.
 - Footer indicators such as Ponytail use `ctx.ui.setStatus(key, text)`. They are available only through the `footerData` object passed to `ctx.ui.setFooter()`.
-- `green_slope` is a container repository with independent nested repositories and linked task worktrees; it has no `.gitmodules` declaration.
+- The reference container repository has independent nested repositories and linked task worktrees; it has no `.gitmodules` declaration.
 
 ### Success criteria
 
@@ -33,7 +33,7 @@ Build a full-height right sidebar tailored to this Pi setup, then move the exist
 - Session title, model/thinking, cwd, context, and stats update after session/model/message events.
 - Footer indicators such as Ponytail appear in the sidebar and no longer consume a footer row.
 - `rpiv-todo` task subjects/statuses replay correctly on resume/tree/compaction and update after tool results; its original widget stays hidden.
-- In a normal repository, Git shows that repository. In `green_slope`, it groups dirty files by the root and dirty independent nested repositories, excludes linked worktrees, and preserves file names when truncating paths.
+- In a container repository, Git groups dirty files by the root and dirty independent nested repositories, excludes linked worktrees, and preserves file names when truncating paths.
 - All timers and terminal monkey-patches are restored on reload/session shutdown, including the hardware cursor.
 
 ## 3. Proposed implementation
@@ -216,7 +216,7 @@ Manual proof in Pi:
 4. Create/update/complete `rpiv-todo` tasks; verify sidebar state and hidden original widget.
 5. Verify Ponytail appears under `Extensions` and no native footer remains.
 6. Verify MCP shows `freecad`, cached `0/14` direct/total data, and the adapter's live aggregate status.
-7. Run in this repository and `/home/djipey/projects/green_slope`; verify root + `tooling` dirty data, independent repo grouping, worktree exclusion, and readable filenames.
+7. Run in this repository and a container-repository fixture; verify root + `tooling` dirty data, independent repo grouping, worktree exclusion, and readable filenames.
 8. Open/close an external editor or reload Pi; verify compositor cleanup and visible hardware cursor.
 
 Installation/landing:
@@ -228,7 +228,7 @@ Installation/landing:
 
 ## 7. Step-by-step execution checklist
 
-- [x] Inspect both sidebar packages, Pi extension/TUI/package/session docs, screenshots, local status producers, `rpiv-todo`, MCP adapter, repository patterns, and `green_slope` Git layout.
+- [x] Inspect both sidebar packages, Pi extension/TUI/package/session docs, screenshots, local status producers, `rpiv-todo`, MCP adapter, repository patterns, and a container-repository Git layout.
 - [x] Confirm rendering, relocation, Git scope, and delivery decisions.
 - [x] Implement pure formatting, stats, todo, MCP, and Git helpers.
 - [x] Implement nested independent-repository discovery and linked-worktree filtering.
@@ -237,7 +237,7 @@ Installation/landing:
 - [x] Wire Pi session/model/message/tool/footer/widget events and commands.
 - [x] Add the adjacent runnable test.
 - [x] Run focused and repository-wide validation.
-- [x] Perform manual Pi/terminal/green_slope verification.
+- [x] Perform manual Pi/terminal container-repository verification.
 - [x] Update this plan with completed steps, deviations, and exact validation results.
 - [x] Add approved durable docs after implementation.
 - [x] Commit, merge through Worktrunk, install from the stable repository path, and verify activation.
@@ -247,7 +247,7 @@ Installation/landing:
 
 - Decision: create this repository's first `docs/` directory after implementation, with an index and a focused sidebar guide.
 - Validated: width 42 and minimum main width 70 work in the actual tmux-backed Pi TUI; `/sidebar width 50` reflowed correctly, and narrowing below the threshold hid the sidebar without overlap.
-- Assumption: independent nested repositories are represented by `.git` directories, while task worktrees use `.git` files as observed in `green_slope`.
+- Assumption: independent nested repositories are represented by `.git` directories, while task worktrees use `.git` files, as observed in the reference container repository.
 - Assumption: only dirty nested repositories need screen rows; clean nested repositories are still discovered but omitted.
 - Assumption: no other custom footer/sidebar should coexist with this extension.
 - Deliberate ceiling: nested repository discovery stops descending after finding an independent nested repository. Add recursive repo-inside-repo discovery only if such a layout actually appears.
@@ -255,7 +255,7 @@ Installation/landing:
 ## Implementation notes and validation results
 
 - The custom footer itself supplies the TUI/theme/footer-status provider, so the planned empty widget was unnecessary.
-- Repository discovery is cached and the periodic refresh changed from 5 to 15 seconds after review of `green_slope`'s 12 repositories. `/sidebar refresh` forces rediscovery.
+- Repository discovery is cached and the periodic refresh changed from 5 to 15 seconds after review of the reference container repository's 12 repositories. `/sidebar refresh` forces rediscovery.
 - Git, conversation, MCP, and todo plain text is sanitized before raw terminal painting; extension status ANSI is preserved intentionally.
 - Parallel active tools are tracked by tool-call id, with elapsed time for the most recently started active tool.
 - Two fresh reviewers found test-resolution, terminal-sanitization, unborn-branch, refresh-cost, active-tool, stale-timer, and MCP-merge issues; all were fixed before final validation.
@@ -276,7 +276,7 @@ Manual Pi checks completed in 180×40 tmux sessions:
 - Ponytail and quota statuses under `Extensions`, with no native footer;
 - MCP aggregate status plus `freecad 0/14`;
 - task-repository Git rows with readable filenames;
-- `green_slope` root plus dirty `tooling`, with linked worktree/container rows excluded;
+- container root plus dirty `tooling`, with linked worktree/container rows excluded;
 - graceful tmux/Pi shutdown for both smoke sessions;
 - merge to `master`, `pi install` from the stable primary-checkout path, `pi list` settings resolution, and a fresh Pi launch without `-e` showing the installed sidebar.
 

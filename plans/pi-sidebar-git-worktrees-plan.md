@@ -148,12 +148,7 @@ Review note:
 
 ### Reported gap
 
-A GreenSlope workspace session exposed the boundary deliberately left out of the initial implementation. Pi ran from `/home/djipey/projects/green_slope`, while Enterprise and Infra were independent repositories nested below that workspace root. Their dirty task worktrees lived outside the workspace tree:
-
-```text
-/home/djipey/projects/green_slope-enterprise-partition-provisioner
-/home/djipey/projects/green_slope-infra-partition-job
-```
+An integration session exposed the boundary deliberately left out of the initial implementation. Pi ran from a container repository root, while Enterprise and Infra were independent repositories nested below it. Their dirty task worktrees lived in sibling directories outside the container tree.
 
 The sidebar showed only dirty files from the workspace-root repository. It did not show either task worktree, even though `git -C enterprise worktree list` and `git -C infra worktree list` reported them correctly.
 
@@ -211,7 +206,7 @@ Automated:
 - run `git diff --check`;
 - run `pre-commit run --all-files`.
 
-Manual proof in the GreenSlope workspace:
+Manual proof in a container repository:
 
 1. Keep the workspace root dirty.
 2. Keep `enterprise/` and `infra/` primary checkouts clean.
@@ -229,7 +224,7 @@ Manual proof in the GreenSlope workspace:
 - [x] Add focused nested-repository/outside-tree tests.
 - [x] Update `docs/pi-sidebar.md`.
 - [x] Run focused and repository hygiene checks.
-- [x] Perform the GreenSlope live sidebar proof.
+- [x] Perform the container-repository live sidebar proof.
 - [x] Record final validation here.
 
 ### Follow-up implementation notes
@@ -248,7 +243,7 @@ Checks completed:
 - `git diff --check`
 - `pre-commit run --all-files` (`Detect hardcoded secrets` passed)
 
-A fresh 180×45 tmux-backed Pi session loaded the task-worktree extension from source in `/home/djipey/projects/green_slope`. The Git section showed the dirty workspace checkout and the dirty nested Infra worktree at `../green_slope-infra-partition-job`, including its branch and changed Terraform files. The clean Enterprise primary checkout and clean outside-tree Enterprise task worktree remained hidden, proving both nested outside-tree discovery and untouched-clean suppression without modifying the GreenSlope repositories.
+A fresh 180×45 tmux-backed Pi session loaded the task-worktree extension from a container repository. The Git section showed the dirty container checkout and a dirty nested Infra worktree outside its tree, including its branch and changed Terraform files. The clean Enterprise primary checkout and clean outside-tree Enterprise task worktree remained hidden, proving both nested outside-tree discovery and untouched-clean suppression without modifying the referenced repositories.
 
 A fresh reviewer found no fixes needed and confirmed the per-owner enumeration, deduplication, linked-container filtering, conversation memory, clean rendering, tests, and docs. An earlier scout review identified the stale clean-current-checkout behavior; the implementation restored the approved path-based rule and the focused test covers it. Implementation commit `03846f5` was merged into `master`.
 

@@ -84,7 +84,7 @@ The following rules define what to look for and what to flag. These are derived
 from JPFrancoia's actual coding patterns across 1,176 commits in 12 Go
 repositories spanning 2022-2026.
 
-Apply the **latest conventions** (2025-2026 era: carpiburri, green_slope) to
+Apply the **latest conventions** (2025-2026 era) to
 new code. Accept older patterns in existing code unless the PR explicitly
 modernises them.
 

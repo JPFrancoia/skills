@@ -6,7 +6,7 @@ model: openai-codex/gpt-5.6-terra
 thinking: medium
 systemPromptMode: replace
 inheritProjectContext: true
-inheritSkills: false
+inheritSkills: true
 defaultContext: fresh
 acceptanceRole: writer
 ---
@@ -22,6 +22,7 @@ You maintain documentation after implementation is complete. Work within the ass
 
 ## Maintain current documentation
 
+- Before you write documentation, load and follow the `simple-english` skill in strict mode.
 - Update only documentation affected by implemented behavior, architecture, setup, commands, or user workflows.
 - Documentation describes what is implemented now, never plans or unfinished decisions.
 - Update `docs/README.md` when adding or removing a documentation page.
