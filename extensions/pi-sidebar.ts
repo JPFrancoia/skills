@@ -882,7 +882,7 @@ class SidebarCompositor {
 		this.getStatuses = getStatuses;
 		this.columnsDescriptor = findDescriptor(this.terminal, "columns");
 		this.ownColumnsDescriptor = Object.getOwnPropertyDescriptor(this.terminal, "columns");
-		this.originalDoRender = tui.doRender;
+		this.originalDoRender = findDescriptor(tui, "doRender")?.descriptor?.value ?? tui.doRender;
 		this.originalWrite = this.terminal.write.bind(this.terminal);
 	}
 
