@@ -144,23 +144,21 @@ async function main(): Promise<void> {
 	const safeStatus = __test__.cleanStatusText("\x1b[31mred\x1b[0m\x1b[2J\nnext");
 	assert.match(safeStatus, /\x1b\[31mred\x1b\[0m next/);
 	assert.doesNotMatch(safeStatus, /\x1b\[2J/);
-	assert.deepEqual(__test__.parseRunningAsyncSubagents([
-		"Spawn budget: unlimited",
-		"Active async runs: 2",
-		"",
-		"- run-one | running | parallel | 2 agents running | /repo",
-		"  1. scout | running | tool read for 2s",
-		"  2. reviewer | completed | 3s",
-		"",
-		"- run-two | running | chain | step 2/3 | /repo",
-		"  1. Planner | completed",
-		"  2. [Validation] Review diff (reviewer) | running | active",
-	].join("\n")), [
-		{ key: "async:run-one:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
-		{ key: "async:run-two:1", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
+	assert.deepEqual(__test__.subagentRunsFromFleetStatus({
+		version: 1,
+		entries: [
+			{ key: "fleet-1", agent: "scout", role: "Research", startedAt: 1_000, tokens: { input: 10, output: 2, total: 12 } },
+			{ key: "fleet-2", agent: "reviewer", startedAt: 2_000, tokens: { input: 20, output: 4, total: 24 } },
+		],
+		totalActive: 2,
+		omitted: 0,
+	}), [
+		{ key: "rpc:fleet-1", agent: "scout", running: true, durationMs: 0, cost: 0 },
+		{ key: "rpc:fleet-2", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
 	]);
-	assert.deepEqual(__test__.parseRunningAsyncSubagents("Spawn budget: unlimited\nNo active async runs."), []);
-	assert.equal(__test__.parseRunningAsyncSubagents("Run: foreground\nState: running"), undefined);
+	assert.deepEqual(__test__.subagentRunsFromFleetStatus({ version: 1, entries: [], totalActive: 0, omitted: 0 }), []);
+	assert.equal(__test__.subagentRunsFromFleetStatus({ version: 2, entries: [] }), undefined);
+	assert.equal(__test__.subagentRunsFromFleetStatus({ version: 1, entries: [{ key: "fleet-1" }] }), undefined);
 	assert.deepEqual(__test__.runningForegroundSubagents({ progress: [
 		{ agent: "scout", status: "running" },
 		{ agent: "reviewer", label: "Review", status: "running" },
@@ -169,22 +167,15 @@ async function main(): Promise<void> {
 		{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
 		{ key: "foreground:1", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
 	]);
-	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout" }), [{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 }]);
-	assert.deepEqual(__test__.initialForegroundSubagents({ tasks: [
-		{ agent: "scout", count: 2 },
-		{ agent: "reviewer", label: "Review" },
-	], concurrency: 2 }), [
+	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout", async: false }), [
 		{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
-		{ key: "foreground:1", agent: "scout", running: true, durationMs: 0, cost: 0 },
 	]);
-	assert.deepEqual(__test__.initialForegroundSubagents({ chain: [{ parallel: [
-		{ agent: "scout" },
-		{ agent: "reviewer", label: "Review" },
-	] }] }), [
+	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout", clarify: true }), [
 		{ key: "foreground:0", agent: "scout", running: true, durationMs: 0, cost: 0 },
-		{ key: "foreground:1", agent: "reviewer", running: true, durationMs: 0, cost: 0 },
 	]);
+	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout" }), []);
 	assert.deepEqual(__test__.initialForegroundSubagents({ agent: "scout", async: true }), []);
+	assert.deepEqual(__test__.initialForegroundSubagents({ workflowScript: "return []", async: false }), []);
 	assert.deepEqual(__test__.subagentRunsFromDetails({
 		results: [
 			{ agent: "worker", usage: { cost: 0.2 }, progressSummary: { durationMs: 60_000 } },
@@ -299,6 +290,7 @@ async function main(): Promise<void> {
 		workedWorktrees: new Set(),
 		subagentRuns: new Map(),
 		asyncRunDirs: new Map(),
+		rpcSubagentRuns: new Map(),
 		foregroundSubagents: new Map(),
 		context: { tokens: 83_000, contextWindow: 100_000, percent: 83 },
 	};
@@ -344,16 +336,19 @@ async function main(): Promise<void> {
 	const subagentsIndex = fullLines.indexOf("Subagents");
 	assert.doesNotMatch(__test__.renderSidebar(state as never, theme as never, new Map(), 48, subagentsIndex + 2).join("\n"), /Subagents/);
 	state.subagentRuns.set("async:run:0", { key: "async:run:0", agent: "scout\x1b[2J\nspoofed", running: false, durationMs: 60_000, cost: 0.2337 });
+	state.rpcSubagentRuns.set("rpc:fleet-1", { key: "rpc:fleet-1", agent: "scout spoofed", running: true, durationMs: 0, cost: 0 });
 	const colorTheme = {
 		...theme,
 		fg: (color: string, text: string) => `\x1b[${color === "success" ? 32 : color === "error" ? 31 : 37}m${text}\x1b[0m`,
 	};
 	const subagentLines = __test__.renderSidebar(state as never, colorTheme as never, new Map(), 48, 40).join("\n");
 	assert.match(subagentLines, /\x1b\[31m██/);
-	assert.match(subagentLines, /\x1b\[31m●/);
+	assert.match(subagentLines, /\x1b\[32m●/);
 	assert.match(subagentLines, /scout spoofed/);
 	assert.match(subagentLines, /1m · \$0\.2337/);
 	assert.doesNotMatch(subagentLines, /\x1b\[2J/);
+	state.rpcSubagentRuns.clear();
+	assert.match(__test__.renderSidebar(state as never, colorTheme as never, new Map(), 48, 40).join("\n"), /\x1b\[31m●/);
 	state.subagentRuns.set("async:run:0", { ...state.subagentRuns.get("async:run:0"), running: true });
 	assert.match(__test__.renderSidebar(state as never, colorTheme as never, new Map(), 48, 40).join("\n"), /\x1b\[32m●/);
 	state.subagentRuns.clear();

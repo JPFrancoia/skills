@@ -111,6 +111,7 @@ type SidebarState = {
 	codexWeeklyQuota?: CodexWeeklyQuota | null;
 	subagentRuns: Map<string, SubagentRun>;
 	asyncRunDirs: Map<string, string>;
+	rpcSubagentRuns: Map<string, SubagentRun>;
 	foregroundSubagents: Map<string, SubagentRun[]>;
 };
 
@@ -504,29 +505,18 @@ function sanitizePlainText(text: string): string {
 		.trim();
 }
 
-function agentFromStatusLabel(value: string): string {
-	const label = sanitizePlainText(value).replace(/^\[[^\]]+\]\s*/, "");
-	return label.match(/\(([^()]+)\)$/)?.[1] ?? label;
-}
-
-function parseRunningAsyncSubagents(text: string): SubagentRun[] | undefined {
-	const lines = text.split("\n");
-	if (lines.includes("No active async runs.")) return [];
-	const heading = lines.findIndex((line) => line.startsWith("Active async runs:"));
-	if (heading < 0) return undefined;
-	const running: SubagentRun[] = [];
-	let runId = "unknown";
-	for (const line of lines.slice(heading + 1)) {
-		const run = line.match(/^- ([^ |]+) \|/);
-		if (run) {
-			runId = run[1]!;
-			continue;
-		}
-		const step = line.match(/^\s+(\d+)\.\s+(.+?)\s+\|\s+running(?:\s+\||$)/);
-		if (!step) continue;
-		running.push({ key: `async:${runId}:${Number(step[1]!) - 1}`, agent: agentFromStatusLabel(step[2]!), running: true, durationMs: 0, cost: 0 });
+function subagentRunsFromFleetStatus(value: unknown): SubagentRun[] | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const fleet = value as { version?: unknown; entries?: unknown };
+	if (fleet.version !== 1 || !Array.isArray(fleet.entries)) return undefined;
+	const runs: SubagentRun[] = [];
+	for (const raw of fleet.entries) {
+		if (!raw || typeof raw !== "object") return undefined;
+		const entry = raw as { key?: unknown; agent?: unknown };
+		if (typeof entry.key !== "string" || !entry.key || typeof entry.agent !== "string" || !entry.agent) return undefined;
+		runs.push({ key: `rpc:${entry.key}`, agent: sanitizePlainText(entry.agent), running: true, durationMs: 0, cost: 0 });
 	}
-	return running;
+	return runs;
 }
 
 function subagentRunsFromDetails(details: unknown, prefix: string, runningOverride?: boolean): SubagentRun[] {
@@ -566,25 +556,9 @@ function runningForegroundSubagents(details: unknown): SubagentRun[] | undefined
 
 function initialForegroundSubagents(args: unknown): SubagentRun[] {
 	if (!args || typeof args !== "object") return [];
-	const value = args as { action?: unknown; agent?: unknown; async?: unknown; tasks?: unknown; chain?: unknown; concurrency?: unknown };
-	if (value.action !== undefined || value.async === true) return [];
-	let candidates: unknown[] = [];
-	if (typeof value.agent === "string") candidates = [{ agent: value.agent }];
-	else if (Array.isArray(value.tasks)) candidates = value.tasks.flatMap((candidate) => {
-		const task = candidate as { count?: unknown };
-		const count = typeof task.count === "number" && task.count > 1 ? Math.floor(task.count) : 1;
-		return Array.from({ length: count }, () => candidate);
-	});
-	else if (Array.isArray(value.chain) && value.chain[0]) {
-		const first = value.chain[0] as { agent?: unknown; parallel?: unknown };
-		candidates = first.parallel ? (Array.isArray(first.parallel) ? first.parallel : [first.parallel]) : [first];
-	}
-	const concurrency = typeof value.concurrency === "number" && value.concurrency > 0 ? Math.floor(value.concurrency) : 4;
-	return candidates.slice(0, concurrency).flatMap((candidate, index) => {
-		const task = candidate as { agent?: unknown };
-		if (typeof task.agent !== "string" || !task.agent) return [];
-		return [{ key: `foreground:${index}`, agent: sanitizePlainText(task.agent), running: true, durationMs: 0, cost: 0 }];
-	});
+	const value = args as { action?: unknown; agent?: unknown; async?: unknown; clarify?: unknown };
+	if (value.action !== undefined || (value.async !== false && value.clarify !== true) || typeof value.agent !== "string" || !value.agent) return [];
+	return [{ key: "foreground:0", agent: sanitizePlainText(value.agent), running: true, durationMs: 0, cost: 0 }];
 }
 
 function subagentRunsFromAsyncStatus(value: unknown, runId: string, sessionId: string | undefined, now = Date.now()): SubagentRun[] | undefined {
@@ -754,7 +728,7 @@ function renderCore(state: SidebarState, theme: Theme, width: number): string[] 
 }
 
 function subagentItems(state: SidebarState, theme: Theme): string[] {
-	const agents = aggregateSubagents(state.subagentRuns.values());
+	const agents = aggregateSubagents([...state.subagentRuns.values(), ...state.rpcSubagentRuns.values()]);
 	return agents.length
 		? agents.map((agent) => `${theme.fg(agent.running ? "success" : "error", "●")} ${theme.fg("text", sanitizePlainText(agent.agent))} ${theme.fg("dim", `${formatSubagentDuration(agent.durationMs)} · $${agent.cost.toFixed(4)}`)}`)
 		: [theme.fg("dim", "(none used)")];
@@ -985,7 +959,7 @@ export const __test__ = {
 	isInsideLinkedWorktree,
 	observeWorkedWorktrees,
 	parseNumstat,
-	parseRunningAsyncSubagents,
+	subagentRunsFromFleetStatus,
 	parseStatus,
 	parseWorktreePaths,
 	enumerateWorktreeTargets,
@@ -1016,6 +990,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		workedWorktrees: new Set(),
 		subagentRuns: new Map(),
 		asyncRunDirs: new Map(),
+		rpcSubagentRuns: new Map(),
 		foregroundSubagents: new Map(),
 	};
 	let compositor: SidebarCompositor | undefined;
@@ -1089,22 +1064,22 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		});
 		return promise;
 	};
-	const requestSubagentStatus = (): Promise<string | undefined> => new Promise((resolveStatus) => {
+	const requestSubagentStatus = (): Promise<unknown> => new Promise((resolveStatus) => {
 		const requestId = `pi-sidebar-${generation}-${++subagentRequestSequence}`;
 		const replyEvent = `${SUBAGENT_RPC_REPLY_PREFIX}${requestId}`;
 		let settled = false;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let unsubscribe: (() => void) | void;
-		const finish = (text?: string) => {
+		const finish = (fleet?: unknown) => {
 			if (settled) return;
 			settled = true;
 			if (timer) clearTimeout(timer);
 			if (typeof unsubscribe === "function") unsubscribe();
-			resolveStatus(text);
+			resolveStatus(fleet);
 		};
 		unsubscribe = pi.events.on(replyEvent, (raw) => {
-			const reply = raw as { success?: unknown; data?: { text?: unknown } };
-			finish(reply.success === true && typeof reply.data?.text === "string" ? reply.data.text : undefined);
+			const reply = raw as { success?: unknown; data?: { fleet?: unknown } };
+			finish(reply.success === true ? reply.data?.fleet : undefined);
 		});
 		timer = setTimeout(() => finish(), SUBAGENT_RPC_TIMEOUT_MS);
 		timer.unref?.();
@@ -1118,18 +1093,10 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 	const refreshSubagents = (): Promise<void> => {
 		if (subagentStatusPromise) return subagentStatusPromise;
 		const runGeneration = generation;
-		const promise = requestSubagentStatus().then((text) => {
-			if (runGeneration !== generation || text === undefined) return;
-			const running = parseRunningAsyncSubagents(text);
-			if (running === undefined) return;
-			const active = new Set(running.map((run) => run.key));
-			for (const [key, previous] of state.subagentRuns) {
-				if (key.startsWith("async:") && previous.running && !active.has(key)) state.subagentRuns.set(key, { ...previous, running: false });
-			}
-			for (const run of running) {
-				const previous = state.subagentRuns.get(run.key);
-				rememberSubagentRun(previous ? { ...previous, agent: run.agent, running: true } : run, !previous);
-			}
+		const promise = requestSubagentStatus().then((fleet) => {
+			if (runGeneration !== generation || fleet === undefined) return;
+			const running = subagentRunsFromFleetStatus(fleet);
+			if (running !== undefined) state.rpcSubagentRuns = new Map(running.map((run) => [run.key, run]));
 		});
 		subagentStatusPromise = promise;
 		void promise.finally(() => {
@@ -1262,6 +1229,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		const replayedSubagents = replaySubagents(ctx.sessionManager.getBranch());
 		state.subagentRuns = replayedSubagents.runs;
 		state.asyncRunDirs = replayedSubagents.asyncRunDirs;
+		state.rpcSubagentRuns.clear();
 		if (footerFallbackTimer) clearTimeout(footerFallbackTimer);
 		footerFallbackTimer = undefined;
 		state.codexWeeklyQuota = undefined;
@@ -1327,6 +1295,7 @@ export default function sidebarExtension(pi: ExtensionAPI) {
 		const replayedSubagents = replaySubagents(ctx.sessionManager.getBranch());
 		state.subagentRuns = replayedSubagents.runs;
 		state.asyncRunDirs = replayedSubagents.asyncRunDirs;
+		state.rpcSubagentRuns.clear();
 		updateSession(ctx);
 		void refreshExternal(ctx);
 		void refreshAsyncMetrics();
