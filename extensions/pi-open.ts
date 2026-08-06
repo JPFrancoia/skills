@@ -84,7 +84,7 @@ function age(createdAt: string, now: number): string {
 }
 
 function markdown(groups: Array<{ repo: Repo; requests: Request[] }>, errors: string[], now: number): string {
-	const blocks: string[] = [];
+	const blocks: string[] = ["---"];
 	for (const group of groups.filter(({ requests }) => requests.length > 0)) {
 		const lines = [`### ${group.repo.path}`];
 		for (const request of [...group.requests].sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))) {
