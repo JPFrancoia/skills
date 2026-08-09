@@ -189,22 +189,50 @@ async function main(): Promise<void> {
 		{ key: "foreground:call:0", agent: "worker", running: true, durationMs: 65_000, cost: 0.2 },
 		{ key: "foreground:call:1", agent: "reviewer", running: false, durationMs: 5_000, cost: 0.03 },
 	]);
+	assert.deepEqual(__test__.subagentRunsFromDetails({
+		results: [{
+			agent: "worker",
+			children: [{ id: "nested-1", agent: "tainted-evidence", state: "running", durationMs: 7_000, totalCost: { costUsd: 0.04 } }],
+		}],
+	}, "foreground:call"), [
+		{ key: "foreground:call:0", agent: "worker", running: false, durationMs: 0, cost: 0 },
+		{ key: "foreground:call:0:nested:0:nested-1", agent: "tainted-evidence", running: true, durationMs: 7_000, cost: 0.04 },
+	]);
 	const asyncStatus = {
 		lifecycleArtifactVersion: 2,
 		runId: "run-1",
 		sessionId: "session-1",
 		steps: [
-			{ agent: "worker", status: "running", startedAt: 1_000, durationMs: 0, totalCost: { costUsd: 0.1 } },
+			{
+				agent: "worker",
+				status: "running",
+				startedAt: 1_000,
+				durationMs: 0,
+				totalCost: { costUsd: 0.1 },
+				children: [{ id: "nested-2", agent: "tainted-evidence", state: "complete", startedAt: 2_000, endedAt: 8_000, totalCost: { costUsd: 0.04 } }],
+			},
 			{ agent: "worker", status: "complete", durationMs: 60_000, totalCost: { costUsd: 0.2 } },
 			{ agent: "planner", status: "pending" },
 		],
 	};
 	const asyncRuns = [
 		{ key: "async:run-1:0", agent: "worker", running: true, durationMs: 10_000, cost: 0.1 },
+		{ key: "async:run-1:0:nested:0:nested-2", agent: "tainted-evidence", running: false, durationMs: 6_000, cost: 0.04 },
 		{ key: "async:run-1:1", agent: "worker", running: false, durationMs: 60_000, cost: 0.2 },
 	];
 	assert.deepEqual(__test__.subagentRunsFromAsyncStatus(asyncStatus, "run-1", "session-1", 11_000), asyncRuns);
 	assert.deepEqual(__test__.subagentRunsFromAsyncStatus({ ...asyncStatus, lifecycleArtifactVersion: 3 }, "run-1", "session-1", 11_000), asyncRuns);
+	assert.deepEqual(__test__.subagentRunsFromAsyncStatus({
+		runId: "workflow-1",
+		sessionId: "session-1",
+		mode: "workflow",
+		steps: [{ agent: "scout", status: "completed", durationMs: 88_498 }],
+		totalCost: { costUsd: 0.02439888 },
+	}, "workflow-1", "session-1"), [
+		{ key: "async:workflow-1:0", agent: "scout", running: false, durationMs: 88_498, cost: 0.02439888 },
+	]);
+	assert.equal(__test__.subagentRunsFromAsyncStatus({ runId: "run-1", sessionId: "session-1", mode: "single", steps: [] }, "run-1", "session-1"), undefined);
+	assert.equal(__test__.subagentRunsFromAsyncStatus({ runId: "run-1", sessionId: "session-1", mode: "workflow", steps: [{ agent: "worker" }] }, "run-1", "session-1"), undefined);
 	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "run-1", sessionId: "other", steps: [] }, "run-1", "session-1"), undefined);
 	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 1, runId: "run-1", sessionId: "session-1", steps: [] }, "run-1", "session-1"), undefined);
 	assert.equal(__test__.subagentRunsFromAsyncStatus({ lifecycleArtifactVersion: 2, runId: "wrong", sessionId: "session-1", steps: [] }, "run-1", "session-1"), undefined);

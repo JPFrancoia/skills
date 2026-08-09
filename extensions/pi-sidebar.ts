@@ -519,6 +519,38 @@ function subagentRunsFromFleetStatus(value: unknown): SubagentRun[] | undefined 
 	return runs;
 }
 
+function nestedSubagentRuns(children: unknown, prefix: string, now = Date.now()): SubagentRun[] {
+	if (!Array.isArray(children)) return [];
+	const runs: SubagentRun[] = [];
+	const visit = (raw: unknown, path: string): void => {
+		if (!raw || typeof raw !== "object") return;
+		const child = raw as Record<string, unknown>;
+		const agents = Array.isArray(child.agents) ? child.agents.filter((agent): agent is string => typeof agent === "string" && agent) : [];
+		const agent = typeof child.agent === "string" && child.agent ? child.agent : agents.length === 1 ? agents[0] : undefined;
+		const status = child.status ?? child.state;
+		const running = status === "queued" || status === "pending" || status === "running";
+		const startedAt = nonNegativeNumber(child.startedAt);
+		const endedAt = nonNegativeNumber(child.endedAt);
+		const recordedDuration = nonNegativeNumber(child.durationMs) ?? 0;
+		const durationMs = startedAt === undefined
+			? recordedDuration
+			: Math.max(recordedDuration, (running ? now : endedAt ?? startedAt) - startedAt);
+		const totalCost = child.totalCost && typeof child.totalCost === "object" ? child.totalCost as Record<string, unknown> : {};
+		const usage = child.usage && typeof child.usage === "object" ? child.usage as Record<string, unknown> : {};
+		if (agent) runs.push({
+			key: `${prefix}:${path}:${typeof child.id === "string" ? child.id : ""}`,
+			agent: sanitizePlainText(agent),
+			running,
+			durationMs,
+			cost: nonNegativeNumber(totalCost.costUsd ?? usage.cost) ?? 0,
+		});
+		if (Array.isArray(child.steps)) child.steps.forEach((step, index) => visit(step, `${path}:step:${index}`));
+		if (Array.isArray(child.children)) child.children.forEach((nested, index) => visit(nested, `${path}:child:${index}`));
+	};
+	children.forEach((child, index) => visit(child, `nested:${index}`));
+	return runs;
+}
+
 function subagentRunsFromDetails(details: unknown, prefix: string, runningOverride?: boolean): SubagentRun[] {
 	if (!details || typeof details !== "object") return [];
 	const value = details as { results?: unknown; progress?: unknown };
@@ -543,6 +575,7 @@ function subagentRunsFromDetails(details: unknown, prefix: string, runningOverri
 			durationMs: nonNegativeNumber(live.durationMs ?? resultProgress.durationMs ?? summary.durationMs) ?? 0,
 			cost: nonNegativeNumber(totalCost.costUsd ?? usage.cost) ?? 0,
 		});
+		runs.push(...nestedSubagentRuns(Array.isArray(live.children) ? live.children : result.children, `${prefix}:${index}`));
 	}
 	return runs;
 }
@@ -563,24 +596,32 @@ function initialForegroundSubagents(args: unknown): SubagentRun[] {
 
 function subagentRunsFromAsyncStatus(value: unknown, runId: string, sessionId: string | undefined, now = Date.now()): SubagentRun[] | undefined {
 	if (!value || typeof value !== "object") return undefined;
-	const status = value as { lifecycleArtifactVersion?: unknown; runId?: unknown; sessionId?: unknown; steps?: unknown };
-	if (!SUBAGENT_LIFECYCLE_VERSIONS.has(status.lifecycleArtifactVersion as number) || status.runId !== runId) return undefined;
+	const status = value as { lifecycleArtifactVersion?: unknown; runId?: unknown; sessionId?: unknown; mode?: unknown; steps?: unknown; totalCost?: unknown };
+	const supported = status.lifecycleArtifactVersion === undefined
+		? status.mode === "workflow"
+		: SUBAGENT_LIFECYCLE_VERSIONS.has(status.lifecycleArtifactVersion as number);
+	if (!supported || status.runId !== runId) return undefined;
 	if (sessionId && status.sessionId !== sessionId) return undefined;
 	if (!Array.isArray(status.steps)) return undefined;
+	const workflowTotalCost = status.mode === "workflow" && status.steps.length === 1 && status.totalCost && typeof status.totalCost === "object"
+		? nonNegativeNumber((status.totalCost as Record<string, unknown>).costUsd)
+		: undefined;
 	const runs: SubagentRun[] = [];
 	for (const [index, raw] of status.steps.entries()) {
 		if (!raw || typeof raw !== "object") return undefined;
 		const step = raw as Record<string, unknown>;
+		if (typeof step.status !== "string" || !["pending", "running", "complete", "completed", "failed", "paused", "stopped", "rejected"].includes(step.status)) return undefined;
 		if (step.status === "pending") continue;
 		if (typeof step.agent !== "string" || !step.agent) return undefined;
 		const totalCost = step.totalCost && typeof step.totalCost === "object" ? step.totalCost as Record<string, unknown> : {};
-		const cost = totalCost.costUsd === undefined ? 0 : nonNegativeNumber(totalCost.costUsd);
+		const cost = totalCost.costUsd === undefined ? workflowTotalCost ?? 0 : nonNegativeNumber(totalCost.costUsd);
 		const running = step.status === "running";
 		const startedAt = nonNegativeNumber(step.startedAt);
 		const recordedDuration = step.durationMs === undefined ? 0 : nonNegativeNumber(step.durationMs);
 		if (cost === undefined || recordedDuration === undefined) return undefined;
 		const durationMs = running && startedAt !== undefined ? Math.max(recordedDuration, now - startedAt) : recordedDuration;
 		runs.push({ key: `async:${runId}:${index}`, agent: sanitizePlainText(step.agent), running, durationMs, cost });
+		runs.push(...nestedSubagentRuns(step.children, `async:${runId}:${index}`, now));
 	}
 	return runs;
 }

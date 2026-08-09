@@ -226,18 +226,17 @@ export default function (pi: ExtensionAPI) {
 			const context = sessionFile && existsSync(sessionFile) && ctx.sessionManager.getLeafId() ? "fork" : "fresh";
 			watchLaunchReply(pi, ctx, requestId, repository);
 
+			const task = `Target repository: ${repository}\nCommit whatever is staged there, creating a meaningful branch first if HEAD is main or master. Use git -C with that exact path for every Git command. Push to origin, create or reuse the matching GitHub PR or GitLab MR, watch CI, and follow your pull-request instructions.`;
 			pi.events.emit(RPC_REQUEST, {
 				version: 1,
 				requestId,
 				method: "spawn",
 				params: {
-					agent: "pull-request-creator",
 					cwd: repository,
 					context,
 					async: true,
-					clarify: false,
 					agentScope: "both",
-					task: `Target repository: ${repository}\nCommit whatever is staged there, creating a meaningful branch first if HEAD is main or master. Use git -C with that exact path for every Git command. Push to origin, create or reuse the matching GitHub PR or GitLab MR, watch CI, and follow your pull-request instructions.`,
+					workflowScript: `return runs.run("main", { agent: "pull-request-creator", task: ${JSON.stringify(task)} });`,
 				},
 				source: { extension: "pi-background-pr" },
 			});

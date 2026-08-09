@@ -233,16 +233,20 @@ async function main(): Promise<void> {
 	await staged.handler("enterprise", staged.ctx);
 	const request = staged.emitted() as {
 		method: string;
-		params: { agent: string; async: boolean; context: string; cwd: string; task: string };
+		params: { async: boolean; context: string; cwd: string; workflowScript: string; clarify?: unknown; agent?: unknown; task?: unknown };
 	};
 	assert.equal(request.method, "spawn");
 	assert.deepEqual(
-		[request.params.agent, request.params.async, request.params.context, request.params.cwd],
-		["contextual-committer", true, "fork", "/work/enterprise"],
+		[request.params.async, request.params.context, request.params.cwd],
+		[true, "fork", "/work/enterprise"],
 	);
-	assert.match(request.params.task, /Target repository: \/work\/enterprise/);
-	assert.match(request.params.task, /Use git -C with that exact path/);
-	assert.doesNotMatch(request.params.task, /Expected HEAD|Expected staged tree/);
+	assert.match(request.params.workflowScript, /agent: "contextual-committer"/);
+	assert.match(request.params.workflowScript, /Target repository: \/work\/enterprise/);
+	assert.match(request.params.workflowScript, /Use git -C with that exact path/);
+	assert.doesNotMatch(request.params.workflowScript, /Expected HEAD|Expected staged tree/);
+	assert.equal(request.params.clarify, undefined);
+	assert.equal(request.params.agent, undefined);
+	assert.equal(request.params.task, undefined);
 	assert.deepEqual(staged.calls, [
 		{ command: "git", args: ["-C", "/work/enterprise", "rev-parse", "--show-toplevel"] },
 		{ command: "git", args: ["-C", "/work/enterprise", "diff", "--cached", "--quiet", "--exit-code"] },

@@ -239,17 +239,21 @@ async function main(): Promise<void> {
 	await staged.handler("infra", staged.ctx);
 	const request = staged.emitted() as {
 		method: string;
-		params: { agent: string; async: boolean; context: string; cwd: string; task: string };
+		params: { async: boolean; context: string; cwd: string; workflowScript: string; clarify?: unknown; agent?: unknown; task?: unknown };
 	};
 	assert.equal(request.method, "spawn");
 	assert.deepEqual(
-		[request.params.agent, request.params.async, request.params.context, request.params.cwd],
-		["pull-request-creator", true, "fork", "/work/infra"],
+		[request.params.async, request.params.context, request.params.cwd],
+		[true, "fork", "/work/infra"],
 	);
-	assert.match(request.params.task, /Target repository: \/work\/infra/);
-	assert.match(request.params.task, /Use git -C with that exact path/);
-	assert.match(request.params.task, /GitHub PR or GitLab MR/);
-	assert.match(request.params.task, /watch CI/);
+	assert.match(request.params.workflowScript, /agent: "pull-request-creator"/);
+	assert.match(request.params.workflowScript, /Target repository: \/work\/infra/);
+	assert.match(request.params.workflowScript, /Use git -C with that exact path/);
+	assert.match(request.params.workflowScript, /GitHub PR or GitLab MR/);
+	assert.match(request.params.workflowScript, /watch CI/);
+	assert.equal(request.params.clarify, undefined);
+	assert.equal(request.params.agent, undefined);
+	assert.equal(request.params.task, undefined);
 	assert.deepEqual(staged.calls, [
 		{ command: "git", args: ["-C", "/work/infra", "rev-parse", "--show-toplevel"] },
 		{ command: "git", args: ["-C", "/work/infra", "diff", "--cached", "--quiet", "--exit-code"] },
