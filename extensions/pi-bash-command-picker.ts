@@ -1,5 +1,5 @@
 /**
- * pi-bash-command-picker — copy one command or an entire assistant shell block.
+ * pi-bash-command-picker — copy shell commands or any assistant code block.
  *
  * Install by symlinking/copying this file into ~/.pi/agent/extensions/ and running /reload.
  * Shortcut: F2
@@ -10,21 +10,21 @@ import { type Focusable, matchesKey, truncateToWidth, visibleWidth } from "@eare
 
 const STATUS_KEY = "bash-command-picker";
 const SHORTCUT = "f2";
-const SHELL_LANGUAGES = new Set(["bash", "sh", "shell", "zsh"]);
+const COMMAND_LANGUAGES = new Set(["bash", "shell"]);
 const MAX_COMMANDS = 200;
 
-type ShellBlock = {
+type CodeBlock = {
 	language: string;
 	code: string;
 };
 
-type ShellCommand = {
+type CopyItem = {
 	command: string;
 	preview: string;
 	language: string;
 	sourceLabel: string;
 	kind: "command" | "block";
-	commandCount: number;
+	commandCount?: number;
 };
 
 function textFromContent(content: unknown): string {
@@ -36,14 +36,13 @@ function textFromContent(content: unknown): string {
 		.join("");
 }
 
-function extractShellBlocks(text: string): ShellBlock[] {
-	const blocks: ShellBlock[] = [];
+function extractCodeBlocks(text: string): CodeBlock[] {
+	const blocks: CodeBlock[] = [];
 	const fence = /^```([^\n`]*)\r?\n([\s\S]*?)^```[ \t]*$/gm;
 	let match: RegExpExecArray | null;
 
 	while ((match = fence.exec(text))) {
 		const language = (match[1] ?? "").trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
-		if (!SHELL_LANGUAGES.has(language)) continue;
 		const code = (match[2] ?? "").replace(/\s+$/, "");
 		if (code.trim()) blocks.push({ language, code });
 	}
@@ -130,9 +129,35 @@ function preview(command: string): string {
 	return command.replace(/\s+/g, " ").trim();
 }
 
-function collectCommands(ctx: ExtensionContext): ShellCommand[] {
+function choicesForBlock(block: CodeBlock, sourceLabel: string): CopyItem[] {
+	const parts = COMMAND_LANGUAGES.has(block.language) ? splitLogicalCommands(block.code) : [];
+	const choices: CopyItem[] = [{
+		command: `${block.code}\n`,
+		preview: preview(block.code),
+		language: block.language,
+		sourceLabel,
+		kind: "block",
+		commandCount: COMMAND_LANGUAGES.has(block.language) ? parts.length : undefined,
+	}];
+
+	for (let commandIndex = parts.length - 1; commandIndex >= 0; commandIndex--) {
+		const command = parts[commandIndex]!;
+		choices.push({
+			command,
+			preview: preview(command),
+			language: block.language,
+			sourceLabel,
+			kind: "command",
+			commandCount: 1,
+		});
+	}
+
+	return choices;
+}
+
+function collectCommands(ctx: ExtensionContext): CopyItem[] {
 	const entries = ctx.sessionManager.getBranch();
-	const commands: ShellCommand[] = [];
+	const commands: CopyItem[] = [];
 
 	for (let i = entries.length - 1; i >= 0 && commands.length < MAX_COMMANDS; i--) {
 		const entry = entries[i];
@@ -141,29 +166,10 @@ function collectCommands(ctx: ExtensionContext): ShellCommand[] {
 		const text = textFromContent(entry.message.content);
 		if (!text) continue;
 
-		const blocks = extractShellBlocks(text);
+		const blocks = extractCodeBlocks(text);
 		for (let blockIndex = blocks.length - 1; blockIndex >= 0 && commands.length < MAX_COMMANDS; blockIndex--) {
-			const block = blocks[blockIndex]!;
-			const parts = splitLogicalCommands(block.code);
-			commands.push({
-				command: `${block.code}\n`,
-				preview: preview(block.code),
-				language: block.language,
-				sourceLabel: new Date(entry.timestamp).toLocaleTimeString(),
-				kind: "block",
-				commandCount: parts.length,
-			});
-			for (let commandIndex = parts.length - 1; commandIndex >= 0 && commands.length < MAX_COMMANDS; commandIndex--) {
-				const command = parts[commandIndex]!;
-				commands.push({
-					command,
-					preview: preview(command),
-					language: block.language,
-					sourceLabel: new Date(entry.timestamp).toLocaleTimeString(),
-					kind: "command",
-					commandCount: 1,
-				});
-			}
+			const choices = choicesForBlock(blocks[blockIndex]!, new Date(entry.timestamp).toLocaleTimeString());
+			commands.push(...choices.slice(0, MAX_COMMANDS - commands.length));
 		}
 	}
 
@@ -181,7 +187,7 @@ function updateStatus(ctx: ExtensionContext): void {
 	const theme = ctx.ui.theme;
 	ctx.ui.setStatus(
 		STATUS_KEY,
-		`${theme.fg("accent", "⎘")} ${theme.fg("dim", `${count} shell choice${count === 1 ? "" : "s"} • ${SHORTCUT}`)}`,
+		`${theme.fg("accent", "⎘")} ${theme.fg("dim", `${count} copy choice${count === 1 ? "" : "s"} • ${SHORTCUT}`)}`,
 	);
 }
 
@@ -195,10 +201,10 @@ class CommandPicker implements Focusable {
 	private scroll = 0;
 	private showFull = false;
 	private readonly theme: Theme;
-	private readonly commands: ShellCommand[];
-	private readonly done: (command: ShellCommand | undefined) => void;
+	private readonly commands: CopyItem[];
+	private readonly done: (command: CopyItem | undefined) => void;
 
-	constructor(theme: Theme, commands: ShellCommand[], done: (command: ShellCommand | undefined) => void) {
+	constructor(theme: Theme, commands: CopyItem[], done: (command: CopyItem | undefined) => void) {
 		this.theme = theme;
 		this.commands = commands;
 		this.done = done;
@@ -240,7 +246,7 @@ class CommandPicker implements Focusable {
 		const lines: string[] = [];
 
 		lines.push(th.fg("border", `╭${"─".repeat(innerWidth)}╮`));
-		lines.push(row(` ${th.fg("accent", th.bold("bash commands & blocks"))} ${th.fg("dim", `${this.commands.length} found`)}`));
+		lines.push(row(` ${th.fg("accent", th.bold("code blocks & commands"))} ${th.fg("dim", `${this.commands.length} found`)}`));
 		lines.push(row(""));
 
 		const maxVisible = 18;
@@ -254,9 +260,10 @@ class CommandPicker implements Focusable {
 			const pointer = active ? th.fg("accent", "▶") : " ";
 			const index = th.fg("dim", `${i + 1}.`);
 			const previewText = active ? th.fg("text", command.preview) : th.fg("muted", command.preview);
-			const text = command.kind === "block"
-				? `${th.fg("accent", th.bold(`▣ COPY ENTIRE BLOCK (${command.commandCount} command${command.commandCount === 1 ? "" : "s"})`))} ${previewText}`
-				: previewText;
+			const blockLabel = command.commandCount === undefined
+				? "▣ COPY ENTIRE BLOCK"
+				: `▣ COPY ENTIRE BLOCK (${command.commandCount} command${command.commandCount === 1 ? "" : "s"})`;
+			const text = command.kind === "block" ? `${th.fg("accent", th.bold(blockLabel))} ${previewText}` : previewText;
 			lines.push(row(` ${pointer} ${index} ${text}`));
 		}
 
@@ -288,11 +295,11 @@ async function showPicker(ctx: ExtensionContext): Promise<void> {
 	if (ctx.mode !== "tui") return;
 	const commands = collectCommands(ctx);
 	if (commands.length === 0) {
-		ctx.ui.notify("No shell commands found in assistant bash blocks.", "warning");
+		ctx.ui.notify("No code blocks found in assistant messages.", "warning");
 		return;
 	}
 
-	const selected = await ctx.ui.custom<ShellCommand | undefined>(
+	const selected = await ctx.ui.custom<CopyItem | undefined>(
 		(tui, theme, _keybindings, done) => {
 			const picker = new CommandPicker(theme, commands, done);
 			return {
@@ -317,18 +324,18 @@ async function showPicker(ctx: ExtensionContext): Promise<void> {
 	if (!selected) return;
 	try {
 		await copyToClipboard(selected.command);
-		ctx.ui.notify(
-			selected.kind === "block"
-				? `Copied entire shell block (${selected.commandCount} command${selected.commandCount === 1 ? "" : "s"}) to clipboard.`
-				: "Copied shell command to clipboard.",
-			"info",
-		);
+		const message = selected.kind === "block"
+			? selected.commandCount === undefined
+				? "Copied entire code block to clipboard."
+				: `Copied entire shell block (${selected.commandCount} command${selected.commandCount === 1 ? "" : "s"}) to clipboard.`
+			: "Copied shell command to clipboard.";
+		ctx.ui.notify(message, "info");
 	} catch (error) {
 		ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
 	}
 }
 
-export const __test__ = { extractShellBlocks, splitLogicalCommands };
+export const __test__ = { choicesForBlock, extractCodeBlocks, splitLogicalCommands };
 
 export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => updateStatus(ctx));
@@ -337,7 +344,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerShortcut(SHORTCUT, {
-		description: "Copy a command or entire assistant shell block",
+		description: "Copy a shell command or any assistant code block",
 		handler: showPicker,
 	});
 }

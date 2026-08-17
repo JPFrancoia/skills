@@ -1,11 +1,11 @@
 # Bash command picker Pi extension plan
 
 Status: Implemented
-Date: 2026-07-10
+Date: 2026-08-17
 
 ## 1. Brief
 
-Build a small Pi extension that lets you copy either one logical shell command or an entire assistant `bash`/`sh`/`shell`/`zsh` block without selecting terminal-rendered text. Pi's public extension API does not appear to support clickable controls inside the built-in assistant Markdown renderer, so the extension uses an `F2` picker over commands extracted from the active session branch. This solves both single-command reuse and whole-block terminal execution without modifying assistant messages or polluting model context.
+Build a small Pi extension that copies every fenced assistant code block. The picker splits only `bash` and `shell` blocks into logical commands. It copies every other block as one unit. The extension uses an `F2` picker and does not alter assistant messages or model context.
 
 ## 2. Current state / relevant context
 
@@ -26,35 +26,37 @@ Behavior:
 
 1. On shortcut, inspect the current session branch.
 2. Find assistant messages, newest first.
-3. Extract fenced shell blocks with languages: `bash`, `sh`, `shell`, `zsh`.
-4. Add a clearly labeled `COPY ENTIRE BLOCK` choice that preserves the fenced block verbatim and appends one final newline so its last command can execute when pasted.
-5. Split each block into logical commands and add the individual choices after its whole-block choice.
-6. Show an overlay picker with one-line previews and optional full previews.
-7. Copy the selected command or block to the clipboard.
+3. Extract every non-empty fenced code block.
+4. Add a clearly labeled `COPY ENTIRE BLOCK` choice for each block. The copied text ends with one newline.
+5. Split only `bash` and `shell` blocks into logical commands. Add those choices after the whole-block choice.
+6. Keep every other block as one copy choice. Do not split its lines.
+7. Show an overlay picker with one-line previews and optional full previews.
+8. Copy the selected command or block to the clipboard.
 
 Trigger:
 
 - Primary: keyboard shortcut `f2`.
 - No slash command was added. The user's preference is no command, and the footer/status hint exposes the shortcut.
 
-Logical command splitting rules for v1:
+Logical command splitting rules for `bash` and `shell` blocks:
 
 - Keep multi-line commands together when lines end with `\`.
 - Keep heredocs together from `<<EOF`/`<<'EOF'`/`<<-EOF` until the delimiter line.
-- Keep simple variable assignments together when immediately followed by a command that uses them in the same setup block? No; v1 treats assignment lines as their own command because this is safer and simpler.
+- Treat simple variable assignments as separate commands.
 - Ignore empty lines and full-line comments.
-- Do not try to parse shell grammar fully. If a block is too complex, copied snippets remain readable and the user can choose the nearest logical chunk.
+- Do not parse shell grammar fully. For complex blocks, select the whole block.
 
 UI:
 
-- Overlay title: `bash commands & blocks` plus choice count.
-- Rows: newest blocks first; each block starts with an accent-colored `▣ COPY ENTIRE BLOCK (N commands)` choice followed by its individual commands.
+- Overlay title: `code blocks & commands` plus choice count.
+- Rows: newest blocks first. Each starts with `▣ COPY ENTIRE BLOCK`. `bash` and `shell` rows show their command count and individual commands.
 - Keys: up/down navigate, Enter copy, Space/Tab full preview, Esc cancel.
-- Footer and notification explicitly distinguish whole-block copying from single-command copying.
+- Footer and notification distinguish whole-block copying from single-command copying.
 
 ## 4. File-by-file impact
 
-- `extensions/pi-bash-command-picker.ts` — new extension containing parser, picker component, and shortcut registration.
+- `extensions/pi-bash-command-picker.ts` — extension with block extraction, shell parsing, picker UI, and shortcut registration.
+- `extensions/pi-bash-command-picker.test.ts` — focused tests for block extraction and command-splitting boundaries.
 - No package/config changes unless the user wants this auto-loaded from settings. Existing install style can be symlink/copy into `~/.pi/agent/extensions/` followed by `/reload`.
 
 ## 5. Risks and edge cases
@@ -84,17 +86,22 @@ UI:
 - [x] Smoke-test with TypeScript import/type syntax if a checker is available; otherwise run via `pi -e` instructions.
 - [x] Add a visually distinct whole-block choice for every shell block.
 - [x] Preserve whole-block content and append a final newline for terminal execution.
+- [x] Add whole-block copying for every fenced code block.
+- [x] Split only `bash` and `shell` blocks into commands.
+- [x] Add focused tests for typed and untyped blocks.
 - [x] Update this plan with actual validation results.
 
 Validation completed:
 
-- `tsc -p /tmp/pi-bash-command-picker-tsconfig.json` (re-run after whole-block support)
-- Node parser self-check using a temporary test copy with package symlinks; verified simple commands, continuations, heredoc, and `if ... fi` grouping.
+- Temporary TypeScript configuration with `npx tsc`; it checked `extensions/pi-bash-command-picker.ts`.
+- `node` ran `extensions/pi-bash-command-picker.test.ts` from a temporary copy with Pi package symlinks.
+- The test checked `bash`, `shell`, `typescript`, `sh`, and untyped blocks.
 
 ## 8. Open questions / assumptions
 
 - Assumption: a keyboard shortcut is acceptable as the commandless trigger because clickable inline icons are not exposed by Pi today.
 - Assumption: latest assistant responses are enough, but the implementation scans all assistant messages in the active branch newest-first.
+- Decision: split only `bash` and `shell` blocks. Other languages do not have shell command boundaries.
 - Decision: copy whole blocks unchanged rather than joining commands with `&&` or adding `set -e`; changing failure behavior would alter the assistant's command sequence.
 - Decision: append a final newline to whole-block clipboard text so the final command is executable as part of the paste.
 
